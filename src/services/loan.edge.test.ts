@@ -189,6 +189,14 @@ describe("validation", () => {
     ];
     for (const [name, over] of bad) test(`refuses: ${name}`, () => expect(ok(over)).toBe(false));
 
+    test("an old debt may already be overdue", () =>
+        expect(
+            ok({
+                purpose: "OLD_DEBT",
+                to_instrument_id: undefined,
+                first_due_on: new Date(Date.UTC(2002, 1, 1)),
+            }),
+        ).toBe(true));
     const inst = (over: Record<string, unknown>) =>
         payInstallmentSchema.safeParse({
             amount: 100,

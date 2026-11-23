@@ -48,7 +48,8 @@ export const createLoanSchema = z
         } else if (d.total_payable !== undefined) {
             issue("total_payable", "Only a flat-rate loan states its total");
         }
-        if (d.first_due_on < d.received_on)
+        // An old debt may already be overdue.
+        if (d.purpose !== "OLD_DEBT" && d.first_due_on < d.received_on)
             issue("first_due_on", "The first installment can't be due before the loan's own date");
         if (d.frequency === "ONE_OFF" && d.installment_count !== 1)
             issue("installment_count", "A one-off repayment is one installment");
