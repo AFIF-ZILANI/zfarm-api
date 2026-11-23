@@ -1,3 +1,4 @@
+import { itemUnitsWithLabel } from "@lib/item-units";
 import prisma from "@lib/db";
 import { Prisma } from "../../prisma/generated/prisma/client";
 import { assertBatchOpen, batchForUsage, batchInHouseOn } from "@lib/batch-guards";
@@ -48,7 +49,7 @@ export const ConsumptionService = {
                     batch: true,
                     house: true,
                     // With its unit conversions, so clients can read feed in bags ("3 Bag 20 kg").
-                    item: { include: { itemUnits: true } },
+                    item: { include: { itemUnits: itemUnitsWithLabel } },
                     stock_unit: true,
                     recorded_by: { select: { id: true, name: true } },
                     fixed_by: { select: { id: true, name: true } },
@@ -68,7 +69,7 @@ export const ConsumptionService = {
             include: {
                 batch: { select: { id: true, batch_code: true, status: true } },
                 house: { select: { id: true, name: true } },
-                item: { include: { itemUnits: true } },
+                item: { include: { itemUnits: itemUnitsWithLabel } },
                 stock_unit: { include: { purchase_item: { select: { id: true, item_id: true } } } },
                 recorded_by: { select: { id: true, name: true } },
                 fixed_by: { select: { id: true, name: true } },
