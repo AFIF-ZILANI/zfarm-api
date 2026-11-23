@@ -155,8 +155,25 @@ async function supplierMoneyAt(at: Date) {
     return row!;
 }
 
+/** Cash in each fund's accounts at an instant. A transfer counts here: it is what moves money between them. */
+async function cashByFund(at: Date) {
+    const before = at.toISOString().replace("Z", "");
+    const rows = await prisma.$queryRaw<{ fund: string; cash: Prisma.Decimal }[]>`
+        SELECT i.fund::text AS fund, SUM(m.amount) AS cash
+        FROM (
+            SELECT to_instrument_id AS account, amount FROM "Payment"
+            WHERE to_instrument_id IS NOT NULL AND payment_date < ${before}::timestamp
+            UNION ALL
+            SELECT from_instrument_id, -amount FROM "Payment"
+            WHERE from_instrument_id IS NOT NULL AND payment_date < ${before}::timestamp
+        ) m
+        JOIN "PaymentInstrument" i ON i.id = m.account
+        GROUP BY i.fund`;
+    return (fund: string) => D(rows.find((r) => r.fund === fund)?.cash);
+}
+
 /** Balances at an instant: everything dated before `at`. */
-async function balancesAt(at: Date) {
+export async function balancesAt(at: Date) {
     const before = { lt: at };
     const [
         moneyIn,
@@ -171,6 +188,7 @@ async function balancesAt(at: Date) {
         supplierMoney,
         loansTaken,
         loansRepaid,
+        cashIn,
     ] = await Promise.all([
         prisma.payment.aggregate({
             where: { direction: "INCOMING", payment_date: before, ref_type: { not: "TRANSFER" } },
@@ -211,9 +229,14 @@ async function balancesAt(at: Date) {
             where: { ref_type: "LOAN", direction: "OUTGOING", payment_date: before },
             _sum: { amount: true },
         }),
+        cashByFund(at),
     ]);
     return {
         cash: D(moneyIn._sum.amount).minus(D(moneyOut._sum.amount)),
+        // The three make the total; only operating cash is the farm's to spend.
+        operating_cash: cashIn("OPERATING"),
+        reinvest_cash: cashIn("REINVEST"),
+        reserve_cash: cashIn("RESERVE"),
         receivables: D(sales._sum.due_amount)
             .plus(D(birdSales._sum.due_amount))
             .minus(D(salesPaid._sum.amount)),
@@ -245,6 +268,9 @@ async function periodFigures(range: Range) {
         net_profit: n(profit),
         margin: revenue.isZero() ? null : Number(profit.dividedBy(revenue).toFixed(4)),
         cash: n(end.cash),
+        operating_cash: n(end.operating_cash),
+        reinvest_cash: n(end.reinvest_cash),
+        reserve_cash: n(end.reserve_cash),
         receivables: n(end.receivables),
         payables: n(end.payables),
         loans_owed: n(end.loans_owed),

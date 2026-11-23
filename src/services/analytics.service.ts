@@ -409,6 +409,7 @@ export const AnalyticsService = {
             cash_position: cashPosition,
             cash_by_instrument: instruments.map((inst, i) => ({
                 instrument_id: inst.id,
+                fund: inst.fund,
                 label: inst.label,
                 balance: balances[i]!.balance,
             })),
