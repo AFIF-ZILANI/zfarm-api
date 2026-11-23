@@ -14,9 +14,12 @@ async function oneActivePerFund<T>(write: () => Promise<T>): Promise<T> {
         return await write();
     } catch (e) {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")
-            throw AppError.conflict("There is already an active account for that fund", {
-                fields: { fund: "Already has an active account" },
-            });
+            throw AppError.conflict(
+                "There is already an active account for that fund. To replace it, transfer its money to an operating account, deactivate it, add the new one, then transfer the money on",
+                {
+                    fields: { fund: "Already has an active account" },
+                },
+            );
         throw e;
     }
 }

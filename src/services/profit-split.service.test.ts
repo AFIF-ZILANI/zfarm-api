@@ -454,6 +454,11 @@ describe("deciding", () => {
             const by = await splitProfile(tx);
             expect((await go(tx, await closedBatch(tx, 1), 0, by)).kind).toBe("PROFIT");
         }));
+    test("a profit of minus zero is no loss", () =>
+        rolledBack(async (tx) => {
+            const by = await splitProfile(tx);
+            expect((await go(tx, await closedBatch(tx, 1), -0, by)).kind).toBe("PROFIT");
+        }));
     test("percentages for this batch only", () =>
         rolledBack(async (tx) => {
             const by = await splitProfile(tx);
@@ -487,6 +492,40 @@ describe("what can't be decided", () => {
             expect(await status(go(tx, late, 100, by))).toBe(409);
             await go(tx, early, 100, by);
             expect(await status(go(tx, late, 100, by))).toBe("ok");
+        }));
+    test("a batch while one that ended before it is sold but not final: that one may be a loss", () =>
+        rolledBack(async (tx) => {
+            const by = await splitProfile(tx);
+            const open = await closedBatch(tx, 2, { status: "SOLD" });
+            const late = await closedBatch(tx, 5);
+            expect(await status(go(tx, await closedBatch(tx, 1), 100, by))).toBe("ok");
+            expect(await status(go(tx, late, 100, by))).toBe(409);
+            await tx.batches.update({ where: { id: open }, data: { status: "CLOSED" } });
+            await go(tx, open, -50, by);
+            expect(await status(go(tx, late, 100, by))).toBe("ok");
+        }));
+    test("shares other than the ones on the screen", () =>
+        rolledBack(async (tx) => {
+            const by = await splitProfile(tx);
+            await go(tx, await closedBatch(tx, 1), -80, by);
+            const ask = async (expected: {
+                recovered: number;
+                principal_taken: number;
+                loss_covered: number;
+            }) =>
+                decide(tx, {
+                    batch_id: next,
+                    profit: D(1000),
+                    pct: PCT,
+                    expected,
+                    actor_id: by,
+                });
+            const next = await closedBatch(tx, 2);
+            const seen = { recovered: 0, principal_taken: 0, loss_covered: 0 };
+            await Bun.sleep(3);
+            expect(await status(ask(seen))).toBe(409);
+            expect(await tx.profitSplit.count({ where: { batch_id: next } })).toBe(0);
+            expect(await status(ask({ ...seen, recovered: 80 }))).toBe("ok");
         }));
     test("skipping: with a reason, in order, and never after a real decision", () =>
         rolledBack(async (tx) => {

@@ -1,6 +1,7 @@
 import prisma from "@lib/db";
 import { AppError } from "@lib/app-error";
 import { audit } from "@lib/audit";
+import { farmDayEnd } from "@lib/farm-day";
 import { handlePrismaWriteError } from "@lib/prisma-errors";
 import { settleLoss, splitProfit, type Pct } from "@lib/profit-split";
 import { getItemAvgCosts } from "@lib/stock-value";
@@ -159,6 +160,14 @@ const undecided = (db: Tx) =>
         select: { id: true, batch_code: true, actual_end_date: true },
     });
 
+/** A sold batch that ended before `day` and isn't final: it may be a loss the later one has to wait for. */
+const stillOpenBefore = (db: Tx, day: Date) =>
+    db.batches.findFirst({
+        where: { status: "SOLD", actual_end_date: { lt: day } },
+        orderBy: { actual_end_date: "asc" },
+        select: { batch_code: true },
+    });
+
 async function requireNext(tx: Tx, batch_id: string) {
     const batch = await tx.batches.findUnique({
         where: { id: batch_id },
@@ -171,11 +180,34 @@ async function requireNext(tx: Tx, batch_id: string) {
     const [next] = await undecided(tx);
     if (next && next.id !== batch_id)
         throw AppError.conflict(`Decide batch ${next.batch_code} first`);
+    const open = next?.actual_end_date && (await stillOpenBefore(tx, next.actual_end_date));
+    if (open)
+        throw AppError.conflict(
+            `Batch ${open.batch_code} ended earlier and isn't final yet -- it comes first`,
+        );
+}
+
+/** A payment recorded meanwhile can change what comes off first: nothing unseen is approved. */
+function sameAsShown(
+    shown: DecideInput["expected"],
+    now: { recovered: Decimal; principal_taken: Decimal; loss_covered: Decimal },
+) {
+    if (!shown) return;
+    if ((Object.keys(now) as (keyof typeof now)[]).some((k) => !now[k].equals(D(shown[k]))))
+        throw AppError.conflict(
+            "The shares have changed since you opened this -- check them again",
+        );
 }
 
 export async function decide(
     tx: Tx,
-    d: { batch_id: string; profit: Decimal; pct: Pct; actor_id: string },
+    d: {
+        batch_id: string;
+        profit: Decimal;
+        pct: Pct;
+        expected?: DecideInput["expected"];
+        actor_id: string;
+    },
 ) {
     await requireNext(tx, d.batch_id);
     const state = await fundState(tx);
@@ -189,11 +221,13 @@ export async function decide(
         approved_by_id: d.actor_id,
         approved_at: new Date(),
     };
-    if (d.profit.isNegative()) {
+    // Below zero, not isNegative(): a rounded-off -0 is no loss.
+    if (d.profit.lessThan(0)) {
         const { covered } = settleLoss({
             loss: d.profit.negated(),
             available: state.reserve.available,
         });
+        sameAsShown(d.expected, { recovered: D(0), principal_taken: D(0), loss_covered: covered });
         return tx.profitSplit.create({ data: { ...common, kind: "LOSS", loss_covered: covered } });
     }
     const { recovered, reinvest, reserve, owner, tax, principal_taken } = splitProfit({
@@ -202,6 +236,7 @@ export async function decide(
         principal: state.principal_waiting,
         pct: d.pct,
     });
+    sameAsShown(d.expected, { recovered, principal_taken, loss_covered: D(0) });
     return tx.profitSplit.create({
         data: {
             ...common,
@@ -340,7 +375,8 @@ async function profitShown(batch_id: string, expected: number) {
     return profit;
 }
 
-/** Costs the rule leaves out because no batch carries them, since the last decision. */
+/** Costs the rule leaves out because no batch carries them, recorded since the last decision -- by when they were
+ * entered, not the date on them, so a back-dated one still shows once. */
 async function notInBatches(since: Date | null) {
     const from = since ?? new Date(0);
     const [months, written, capital] = await Promise.all([
@@ -354,7 +390,7 @@ async function notInBatches(since: Date | null) {
             select: { item_id: true, quantity: true },
         }),
         prisma.expense.aggregate({
-            where: { cost_type: "SHARED_CAPITAL", date: { gte: from } },
+            where: { cost_type: "SHARED_CAPITAL", created_at: { gte: from } },
             _sum: { amount: true },
         }),
     ]);
@@ -362,7 +398,7 @@ async function notInBatches(since: Date | null) {
     const shared = months
         .filter((m) => m.bird_days === 0)
         .flatMap((m) => m.expenses)
-        .filter((e) => e.date >= from)
+        .filter((e) => e.created_at >= from)
         .reduce((t, e) => t.plus(e.amount), D(0));
     const lost = written.reduce((t, w) => t.plus(w.quantity.times(avg.get(w.item_id) ?? 0)), D(0));
     const cap = D(capital._sum.amount);
@@ -400,7 +436,8 @@ export const ProfitSplitService = {
                 }),
                 latestDecision(prisma),
                 BatchPnlService.all(),
-                balancesAt(new Date()),
+                // Whatever is dated up to today: a stored date is 06:00 on the farm, still to come just after midnight.
+                balancesAt(farmDayEnd(new Date())),
                 prisma.payment.findMany({
                     where: { split_move: { not: null } },
                     orderBy: [{ payment_date: "desc" }, { created_at: "desc" }],
@@ -412,6 +449,8 @@ export const ProfitSplitService = {
                 }),
             ]);
         const profitNow = new Map(statements.map((s) => [s.batch.id, D(s.net_profit).toFixed(2)]));
+        const first = batches[0]?.actual_end_date;
+        const open = first ? await stillOpenBefore(prisma, first) : null;
         const canSkip = done.every((d) => d.kind === "SKIPPED");
         return {
             ...text(state),
@@ -424,8 +463,10 @@ export const ProfitSplitService = {
                 batch_code: b.batch_code,
                 ended_on: b.actual_end_date,
                 net_profit: profitNow.get(b.id) ?? "0.00",
-                can_decide: i === 0,
-                can_skip: i === 0 && canSkip,
+                can_decide: i === 0 && !open,
+                can_skip: i === 0 && !open && canSkip,
+                /** The earlier batch that has to be final first. */
+                waits_for: i === 0 ? (open?.batch_code ?? null) : null,
             })),
             done: done.map(({ batch, approved_by, ...d }) => ({
                 ...d,
@@ -438,6 +479,13 @@ export const ProfitSplitService = {
             moves,
         };
     },
+
+    /** One batch's decision, or null. */
+    forBatch: (batch_id: string) =>
+        prisma.profitSplit.findUnique({
+            where: { batch_id },
+            select: { kind: true, net_profit: true, loss_covered: true, approved_at: true },
+        }),
 
     async decide(d: DecideInput) {
         const profit = await profitShown(d.batch_id, d.expected_profit);
@@ -455,7 +503,13 @@ export const ProfitSplitService = {
             tax: D(p.tax),
         };
         return locked((tx) =>
-            decide(tx, { batch_id: d.batch_id, profit, pct, actor_id: d.actor_id }),
+            decide(tx, {
+                batch_id: d.batch_id,
+                profit,
+                pct,
+                expected: d.expected,
+                actor_id: d.actor_id,
+            }),
         );
     },
 

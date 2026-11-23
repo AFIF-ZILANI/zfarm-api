@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-const percent = z.coerce.number().min(0).max(100).multipleOf(0.01, "Use at most two decimals").optional();
+const percent = z.number().min(0).max(100).multipleOf(0.01, "Use at most two decimals");
 
 export const updateFarmSettingsSchema = z.object({
     // The four go together: three shares of a profit that make 100, and the tax inside the reserve.
-    split_reinvest: percent,
-    split_reserve: percent,
-    split_owner: percent,
-    split_tax: percent,
+    split_reinvest: percent.optional(),
+    split_reserve: percent.optional(),
+    split_owner: percent.optional(),
+    split_tax: percent.optional(),
     // Past 06:00 a stored date (midnight UTC = 06:00 Dhaka) would slip to the day before; see farm-day.ts.
     day_start_hour: z.coerce
         .number()

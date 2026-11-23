@@ -20,6 +20,7 @@ export type SharedMonth = {
     expenses: {
         id: string;
         date: Date;
+        created_at: Date;
         category: string;
         label: string;
         amount: number;
@@ -79,6 +80,7 @@ export const SharedCostService = {
             row.expenses.push({
                 id: e.id,
                 date: e.date,
+                created_at: e.created_at,
                 category: e.category,
                 label: label.get(e.category) ?? e.category,
                 amount,

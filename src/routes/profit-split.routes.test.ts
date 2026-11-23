@@ -2,6 +2,7 @@ import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test
 import { Hono } from "hono";
 import prisma from "@lib/db";
 import { AppError } from "@lib/app-error";
+import { farmDay } from "@lib/farm-day";
 import { canAccess } from "@lib/permissions";
 import { sendError } from "@lib/response";
 import { purgeAuditLog } from "@lib/test-fixtures";
@@ -110,7 +111,9 @@ afterEach(async () => {
         where: { OR: [{ from_instrument_id: op }, { to_instrument_id: op }] },
     });
     await prisma.profitSplit.deleteMany({ where: { batch_id: { in: batches } } });
-    await prisma.expense.deleteMany({ where: { batch_id: { in: batches } } });
+    await prisma.expense.deleteMany({
+        where: { OR: [{ batch_id: { in: batches } }, { recorded_by_id: by }] },
+    });
     await prisma.sale.deleteMany({ where: { batch_id: { in: batches } } });
     await prisma.batches.deleteMany({ where: { id: { in: batches } } });
     batches.length = 0;
@@ -227,6 +230,103 @@ describe("/profit-splits", () => {
         });
         expect(await read()).toEqual(before);
     });
+    test("a batch's own decision, or none yet", async () => {
+        const id = await batch(1, 1000, 400);
+        expect((await call("GET", `/batch/${id}`)).body.data).toBe(null);
+        await decide(id, 600);
+        const { data } = (await call("GET", `/batch/${id}`)).body;
+        expect([data.kind, Number(data.net_profit)]).toEqual(["PROFIT", 600]);
+    });
+    test("skip", async () => {
+        const id = await batch(1, 1000, 400);
+        const row = async () =>
+            (await ProfitSplitService.overview()).waiting.find((w) => w.batch_id === id);
+        const { can_skip } = (await row())!;
+        // Only while the shared database holds no real decision.
+        expect(can_skip).toBe(
+            (await prisma.profitSplit.count({ where: { kind: { not: "SKIPPED" } } })) === 0,
+        );
+        const r = await call("POST", "/skip", { batch_id: id, reason: "Before FMS" });
+        expect(r.status).toBe(can_skip ? 201 : 409);
+        if (can_skip) expect([r.body.data.kind, await row()]).toEqual(["SKIPPED", undefined]);
+    });
+    test("a batch that ended before an unfinished one waits", async () => {
+        const [older, newer] = [await batch(1, 1000, 0), await batch(2, 1000, 0)];
+        await prisma.batches.update({ where: { id: older }, data: { status: "SOLD" } });
+        const row = (await ProfitSplitService.overview()).waiting.find(
+            (w) => w.batch_id === newer,
+        )!;
+        expect(row.can_decide).toBe(false);
+        expect(row.waits_for).toContain("SPLITR-");
+        expect((await decide(newer, 1000)).status).toBe(409);
+    });
+    test("spendable cash: operating accounts less unpaid bills; a move takes it out, a draw too", async () => {
+        const id = await batch(1, 1000, 0);
+        const spendable = async () => Number((await ProfitSplitService.overview()).spendable_cash);
+        const pay = (
+            amount: number,
+            ref_type: "TRANSFER" | "OTHER_IN" | "OWNER_DRAW",
+            from?: string,
+            to?: string,
+            payment_date = new Date(Date.UTC(2007, 5, 1)),
+        ) =>
+            prisma.payment.create({
+                data: {
+                    amount,
+                    payment_date,
+                    direction: ref_type === "OTHER_IN" ? "INCOMING" : "OUTGOING",
+                    ref_type,
+                    ref_id: "x",
+                    from_instrument_id: from ?? null,
+                    to_instrument_id: to ?? null,
+                    note: "x",
+                },
+            });
+        let was = await spendable();
+        const changed = async (by: number) => {
+            const now = await spendable();
+            expect(now - was).toBeCloseTo(by, 2);
+            was = now;
+        };
+        await pay(500, "OTHER_IN", undefined, op);
+        await changed(500);
+        await pay(200, "TRANSFER", op, reinvest);
+        await changed(-200);
+        await pay(30, "OWNER_DRAW", op);
+        await changed(-30);
+        await bill(id, 70, 1);
+        await changed(-70);
+        // Dated today on the farm's calendar, which is hours ahead of UTC's.
+        await pay(11, "OTHER_IN", undefined, op, farmDay(new Date()));
+        await changed(11);
+    });
+    test("costs in no batch: counted from when they were recorded, whatever date they carry", async () => {
+        const id = await batch(1, 1000, 0);
+        const outside = async () => (await ProfitSplitService.overview()).not_in_batches;
+        const cost = (cost_type: "SHARED_CAPITAL" | "SHARED_PERIOD", amount: number) =>
+            prisma.expense.create({
+                data: {
+                    category: "MISC",
+                    cost_type,
+                    amount,
+                    date: new Date(Date.UTC(2006, 0, 1)), // no birds then
+                    remarks: "Split routes",
+                    recorded_by_id: by,
+                },
+            });
+        await cost("SHARED_CAPITAL", 900);
+        await Bun.sleep(5);
+        await decide(id, 1000);
+        const fresh = await outside();
+        await Bun.sleep(5);
+        await cost("SHARED_CAPITAL", 500);
+        await cost("SHARED_PERIOD", 40);
+        const now = await outside();
+        expect(Number(now.capital) - Number(fresh.capital)).toBe(500);
+        expect(Number(now.shared_no_birds) - Number(fresh.shared_no_birds)).toBe(40);
+        expect(Number(now.total) - Number(fresh.total)).toBe(540);
+        expect(Number(fresh.capital)).toBe(0); // the 900 was there before the decision
+    });
     test("two people at once: one decision, and never more moved than was left", async () => {
         const id = await batch(1, 1000, 0);
         const r = await Promise.all([decide(id, 1000), decide(id, 1000)]);
@@ -250,6 +350,17 @@ describe("/profit-splits", () => {
         for (const [m, p, b] of [
             ["POST", "", {}],
             ["POST", "", { batch_id: "x", expected_profit: 1 }],
+            ["POST", "", { batch_id: id, expected_profit: null }],
+            ["POST", "", { batch_id: id, expected_profit: "" }],
+            [
+                "POST",
+                "",
+                {
+                    batch_id: id,
+                    expected_profit: 1000,
+                    pct: { reinvest: 50, reserve: 50, owner: null, tax: 1 },
+                },
+            ],
             ["POST", "", { batch_id: crypto.randomUUID(), expected_profit: 1 }],
             [
                 "POST",

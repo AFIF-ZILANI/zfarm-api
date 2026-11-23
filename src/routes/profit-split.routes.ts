@@ -12,6 +12,7 @@ import {
 export const profitSplitRoutes = new Hono();
 
 profitSplitRoutes.get("/", ProfitSplitController.overview);
+profitSplitRoutes.get("/batch/:batchId", ProfitSplitController.forBatch);
 profitSplitRoutes.post("/", zValidatorRfc7807("json", decideSchema), ProfitSplitController.decide);
 profitSplitRoutes.post("/skip", zValidatorRfc7807("json", skipSchema), ProfitSplitController.skip);
 profitSplitRoutes.post("/moves", zValidatorRfc7807("json", moveSchema), ProfitSplitController.move);

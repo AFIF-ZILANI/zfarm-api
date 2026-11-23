@@ -1,6 +1,6 @@
 # Endpoint index
 
-Every route the API serves (337 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
+Every route the API serves (338 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
 
 For what the fields mean, the error cases and worked examples, see [`api.md`](api.md). For conventions (envelope, pagination, errors, idempotency) see its section 1.
 
@@ -92,7 +92,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/farm-settings` | Admin | 200 | — | Fetched successfully |
-| PATCH | `/api/farm-settings` | Admin | 200 | body: `split_reinvest`, `split_reserve`, `split_owner`, `split_tax`, `day_start_hour?`, `settlement_days?` | Farm settings saved |
+| PATCH | `/api/farm-settings` | Admin | 200 | body: any of `split_reinvest`, `split_reserve`, `split_owner`, `split_tax`, `day_start_hour`, `settlement_days` | Farm settings saved |
 
 ### `/api/uploads`
 
@@ -515,7 +515,8 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/profit-splits` | Admin | 200 | — | Profit split fetched |
-| POST | `/api/profit-splits` | Admin | 201 | body: `batch_id`, `expected_profit`, `pct?` | Batch decided |
+| GET | `/api/profit-splits/batch/:batchId` | Admin | 200 | — | Batch decision fetched |
+| POST | `/api/profit-splits` | Admin | 201 | body: `batch_id`, `expected_profit`, `expected?`, `pct?` | Batch decided |
 | POST | `/api/profit-splits/skip` | Admin | 201 | body: `batch_id`, `reason` | Batch skipped |
 | POST | `/api/profit-splits/moves` | Admin | 201 | body: `move`, `amount`, `payment_date`, `operating_instrument_id`, `transaction_ref?`, `note?` | Move recorded |
 | POST | `/api/profit-splits/moves/:paymentId/remove` | Admin | 200 | body: `reason` | Move removed |

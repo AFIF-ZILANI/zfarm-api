@@ -22,6 +22,15 @@ export const ProfitSplitController = {
             sendSuccess(c, await ProfitSplitService.overview(), "Profit split fetched"),
         );
     },
+    async forBatch(c: Context) {
+        return withHandler(c, async () =>
+            sendSuccess(
+                c,
+                await ProfitSplitService.forBatch(param(c, "batchId")),
+                "Batch decision fetched",
+            ),
+        );
+    },
     async decide(c: Context) {
         return withHandler(c, async () =>
             sendSuccess(
