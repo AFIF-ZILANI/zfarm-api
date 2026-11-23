@@ -14,6 +14,8 @@ export const PAYMENT_REF_TYPES = [
     "OTHER_IN",
     "OTHER_OUT",
     "TRANSFER",
+    "SUPPLIER_OPENING",
+    "SUPPLIER_ADVANCE",
 ] as const;
 
 /** Cash-book rows with no bill behind them: ref_id is the payment's own id, never sent by a client. */
@@ -30,7 +32,8 @@ export const NO_BILL_REFS = [
  * salary payment is emitted by confirming a PayrollPayout, which can require
  * proof of transfer, and Payment cannot. Queryable, not writable.
  * See docs/payroll-ledger-bridge.md. LOAN is absent too: an installment goes through
- * POST /loans/:id/installments, which also books its interest.
+ * POST /loans/:id/installments, which also books its interest. SUPPLIER_* are parts of a
+ * supplier payment (POST /suppliers/:id/payments).
  */
 const creatableRefType = z.enum(["SALE", "BIRD_SALE", "PURCHASE", "EXPENSE", ...NO_BILL_REFS]);
 const refType = z.enum(PAYMENT_REF_TYPES);

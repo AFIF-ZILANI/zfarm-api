@@ -15,7 +15,8 @@ import {
 // PAYROLL rows are emitted by EmployeePayout confirmation (wage or bonus) and still have to be
 // readable here.
 type RefType = PaymentRefType;
-type BillRef = Exclude<RefType, (typeof NO_BILL_REFS)[number]>;
+// An advance settles nothing yet, so it has no bill either.
+type BillRef = Exclude<RefType, (typeof NO_BILL_REFS)[number] | "SUPPLIER_ADVANCE">;
 
 const REF_LABEL: Record<BillRef, string> = {
     SALE: "Sale",
@@ -24,6 +25,7 @@ const REF_LABEL: Record<BillRef, string> = {
     EXPENSE: "Expense",
     PAYROLL: "Payout",
     LOAN: "Loan",
+    SUPPLIER_OPENING: "Supplier",
 };
 
 /** Money in or out follows from what the payment settles -- never from the client. A LOAN payment
@@ -42,6 +44,9 @@ const DIRECTION = {
     OWNER_DRAW: "OUTGOING",
     OTHER_OUT: "OUTGOING",
     TRANSFER: "OUTGOING",
+    SUPPLIER_OPENING: "OUTGOING",
+    // What was paid ahead; a supplier giving it back is an INCOMING row written by SupplierPaymentService.
+    SUPPLIER_ADVANCE: "OUTGOING",
 } as const satisfies Record<RefType, "INCOMING" | "OUTGOING">;
 
 const isNoBill = (t: RefType): t is (typeof NO_BILL_REFS)[number] =>
@@ -100,6 +105,13 @@ async function owedForRef(
                         select: { total_payable: true },
                     })
                 )?.total_payable;
+            case "SUPPLIER_OPENING":
+                return (
+                    await tx.suppliers.findUnique({
+                        where: { id: ref_id },
+                        select: { opening_due: true },
+                    })
+                )?.opening_due;
         }
     })();
 
@@ -190,7 +202,8 @@ export const PaymentService = {
     /** Live outstanding balance for one polymorphic ref -- the owed figure
      * minus every Payment recorded against it. */
     async outstandingForRef(ref_type: RefType, ref_id: string) {
-        if (isNoBill(ref_type)) throw AppError.badRequest("This kind of payment has no bill");
+        if (isNoBill(ref_type) || ref_type === "SUPPLIER_ADVANCE")
+            throw AppError.badRequest("This kind of payment has no bill");
         return outstandingWithin(prisma, ref_type, ref_id);
     },
 
@@ -207,7 +220,8 @@ export const PaymentService = {
 
 /** A payment as written -- the API's create body, or a loan installment from LoanService. */
 export type PaymentWrite = Omit<CreatePaymentInput, "ref_type"> & {
-    ref_type: CreatePaymentInput["ref_type"] | "LOAN";
+    ref_type: CreatePaymentInput["ref_type"] | "LOAN" | "SUPPLIER_OPENING";
+    supplier_payment_id?: string;
 };
 
 /**
@@ -305,6 +319,9 @@ export async function writePayment(tx: Prisma.TransactionClient, data: PaymentWr
                 handled_by_id: data.handled_by_id,
             }),
             ...(data.note !== undefined && { note: data.note }),
+            ...(data.supplier_payment_id !== undefined && {
+                supplier_payment_id: data.supplier_payment_id,
+            }),
         },
     });
 }

@@ -234,6 +234,11 @@ enum PaymentRefType {
   OTHER_OUT
   /// Between two of the farm's own accounts: names both, and is neither money in nor money out.
   TRANSFER
+  // Parts of a SupplierPayment (always grouped under one); ref_id = the supplier.
+  /// Settled the supplier's old balance (Suppliers.opening_due).
+  SUPPLIER_OPENING
+  /// Paid before the goods: not used yet. An INCOMING one is the supplier giving it back.
+  SUPPLIER_ADVANCE
 }
 
 /// Why the farm borrowed. Decides who bears the interest: BATCH = that batch alone (DIRECT, booked
@@ -560,6 +565,7 @@ model Profiles {
   purchasesRecorded       Purchase[]
   expensesRecorded        Expense[]
   loansRecorded           Loan[]
+  supplierPayments        SupplierPayment[]
   salesRecorded           Sale[]
   birdSalesRecorded       BirdSale[]
   environmentRecordsTaken EnvironmentRecords[]
@@ -689,8 +695,14 @@ model Suppliers {
   created_at  DateTime             @default(now())
   updated_at  DateTime             @updatedAt
 
+  /// Owed from before FMS, whose bills were never entered. Adds no stock and is never a cost.
+  opening_due  Decimal   @default(0) @db.Decimal(10, 2)
+  opening_date DateTime?
+  opening_note String?
+
   items     Item[]
   purchases Purchase[]
+  payments  SupplierPayment[]
 }
 
 model Doctors {
@@ -1684,7 +1696,12 @@ model Payment {
   /// LOAN installments: the interest part, when it was a cost of its own.
   loan_interest Expense?
 
+  /// The one amount handed to (or given back by) a supplier that this row is part of.
+  supplier_payment_id String?
+  supplier_payment    SupplierPayment? @relation(fields: [supplier_payment_id], references: [id], onDelete: Restrict)
+
   @@index([ref_type, ref_id])
+  @@index([supplier_payment_id])
   @@index([from_instrument_id])
   @@index([to_instrument_id])
 }
@@ -1704,8 +1721,32 @@ model PaymentInstrument {
   is_active  Boolean       @default(true)
   created_at DateTime      @default(now())
 
-  payments_from Payment[] @relation("PaymentFrom")
-  payments_to   Payment[] @relation("PaymentTo")
+  payments_from    Payment[]         @relation("PaymentFrom")
+  payments_to      Payment[]         @relation("PaymentTo")
+  supplierPayments SupplierPayment[]
+}
+
+/// What was really handed to a supplier (OUTGOING) or given back by one (INCOMING), once. The Payment rows
+/// under it say what each part settled and always add up to `amount`. Amount, date and account never change;
+/// using an advance only re-points its rows (docs/superpowers/specs/2026-11-23-supplier-statement-design.md).
+model SupplierPayment {
+  id              String            @id @default(uuid())
+  supplier_id     String
+  supplier        Suppliers         @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
+  direction       PaymentType
+  amount          Decimal           @db.Decimal(10, 2)
+  payment_date    DateTime
+  instrument_id   String
+  instrument      PaymentInstrument @relation(fields: [instrument_id], references: [id], onDelete: Restrict)
+  transaction_ref String?
+  note            String?
+  recorded_by_id  String
+  recorded_by     Profiles          @relation(fields: [recorded_by_id], references: [id], onDelete: Restrict)
+  created_at      DateTime          @default(now())
+
+  payments Payment[]
+
+  @@index([supplier_id, payment_date])
 }
 
 // ════════════════════════════════════════════════════════════════════
