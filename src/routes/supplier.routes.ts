@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import { zValidatorRfc7807 } from "@lib/validator";
 import { SupplierController } from "@controllers/supplier.controller";
+import { SupplierPaymentController } from "@controllers/supplier-payment.controller";
+import {
+    openingSchema,
+    payInput,
+    refundSchema,
+    removePaymentSchema,
+} from "@validators/supplier-payment.validator";
 import {
     createSupplierSchema,
     updateSupplierSchema,
@@ -27,3 +34,26 @@ supplierRoutes.patch(
 );
 supplierRoutes.post("/:id/deactivate", SupplierController.deactivate);
 supplierRoutes.post("/:id/reactivate", SupplierController.reactivate);
+
+// Money with the supplier -- admin only: no employee rule in lib/permissions.ts names /suppliers.
+supplierRoutes.get("/:id/dues", SupplierPaymentController.dues);
+supplierRoutes.post(
+    "/:id/payments",
+    zValidatorRfc7807("json", payInput),
+    SupplierPaymentController.pay,
+);
+supplierRoutes.post(
+    "/:id/payments/:paymentId/remove",
+    zValidatorRfc7807("json", removePaymentSchema),
+    SupplierPaymentController.remove,
+);
+supplierRoutes.post(
+    "/:id/refunds",
+    zValidatorRfc7807("json", refundSchema),
+    SupplierPaymentController.refund,
+);
+supplierRoutes.patch(
+    "/:id/opening",
+    zValidatorRfc7807("json", openingSchema),
+    SupplierPaymentController.setOpening,
+);
