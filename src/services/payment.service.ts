@@ -1,6 +1,6 @@
 import prisma from "@lib/db";
 import { NEVER_OWED_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
-import { Prisma } from "../../prisma/generated/prisma/client";
+import { Prisma, type SplitMove } from "../../prisma/generated/prisma/client";
 import { AppError } from "@lib/app-error";
 import { handlePrismaWriteError } from "@lib/prisma-errors";
 import { toSkipTake, buildMeta } from "@lib/pagination";
@@ -47,6 +47,7 @@ const DIRECTION = {
     SUPPLIER_OPENING: "OUTGOING",
     // What was paid ahead; a supplier giving it back is an INCOMING row written by SupplierPaymentService.
     SUPPLIER_ADVANCE: "OUTGOING",
+    TAX_PAID: "OUTGOING",
 } as const satisfies Record<RefType, "INCOMING" | "OUTGOING">;
 
 const isNoBill = (t: RefType): t is (typeof NO_BILL_REFS)[number] =>
@@ -222,6 +223,8 @@ export const PaymentService = {
 export type PaymentWrite = Omit<CreatePaymentInput, "ref_type"> & {
     ref_type: CreatePaymentInput["ref_type"] | "LOAN" | "SUPPLIER_OPENING";
     supplier_payment_id?: string;
+    /** Set only by ProfitSplitService. */
+    split_move?: SplitMove;
 };
 
 /**
@@ -322,6 +325,7 @@ export async function writePayment(tx: Prisma.TransactionClient, data: PaymentWr
             ...(data.supplier_payment_id !== undefined && {
                 supplier_payment_id: data.supplier_payment_id,
             }),
+            ...(data.split_move !== undefined && { split_move: data.split_move }),
         },
     });
 }

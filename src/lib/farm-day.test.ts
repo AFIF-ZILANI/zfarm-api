@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect } from "bun:test";
-import { cycleDay, farmDay, farmDayStart, setDayStartHour } from "./farm-day";
+import { cycleDay, farmDay, farmDayEnd, farmDayStart, setDayStartHour } from "./farm-day";
 
 describe("farmDay", () => {
     test("early morning in Dhaka belongs to that Dhaka day, not the previous UTC day", () => {
@@ -74,6 +74,12 @@ describe("farm day starting at 04:00", () => {
         expect(cycleDay(placed, new Date("2026-10-25T22:00:00Z"))).toBe(2); // 04:00 on 26 Oct in Dhaka
     });
 
+    test("farmDayEnd is past today's stored date, from the moment the day begins", () => {
+        setDayStartHour(0);
+        // 02:00 on the 1st in Dhaka, still the 31st in UTC
+        expect(farmDayEnd(new Date("2026-10-31T20:00:00Z")).toISOString()).toBe("2026-11-02T00:00:00.000Z");
+        expect(farmDayEnd(new Date("2026-11-01T17:59:00Z")).toISOString()).toBe("2026-11-02T00:00:00.000Z");
+    });
     test("farmDayStart is 04:00 Dhaka of the current farm day", () => {
         setDayStartHour(4);
         // 02:00 on 2 Nov in Dhaka -> farm day 1 Nov, which began 04:00 on 1 Nov Dhaka = 22:00 UTC on 31 Oct.

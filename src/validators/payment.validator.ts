@@ -16,6 +16,7 @@ export const PAYMENT_REF_TYPES = [
     "TRANSFER",
     "SUPPLIER_OPENING",
     "SUPPLIER_ADVANCE",
+    "TAX_PAID",
 ] as const;
 
 /** Cash-book rows with no bill behind them: ref_id is the payment's own id, never sent by a client. */
@@ -25,6 +26,7 @@ export const NO_BILL_REFS = [
     "OTHER_IN",
     "OTHER_OUT",
     "TRANSFER",
+    "TAX_PAID",
 ] as const;
 
 /**
@@ -39,7 +41,7 @@ const creatableRefType = z.enum(["SALE", "BIRD_SALE", "PURCHASE", "EXPENSE", ...
 const refType = z.enum(PAYMENT_REF_TYPES);
 
 /** Refs whose payment is money leaving the farm. Their source instrument is required. */
-const OUTGOING_REFS: string[] = ["PURCHASE", "EXPENSE", "OWNER_DRAW", "OTHER_OUT"];
+const OUTGOING_REFS: string[] = ["PURCHASE", "EXPENSE", "OWNER_DRAW", "OTHER_OUT", "TAX_PAID"];
 const isNoBill = (t: string) => (NO_BILL_REFS as readonly string[]).includes(t);
 
 export const createPaymentSchema = z

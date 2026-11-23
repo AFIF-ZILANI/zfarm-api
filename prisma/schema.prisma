@@ -239,6 +239,31 @@ enum PaymentRefType {
   SUPPLIER_OPENING
   /// Paid before the goods: not used yet. An INCOMING one is the supplier giving it back.
   SUPPLIER_ADVANCE
+  /// Income tax or a regulatory fee, from the money held for it: no bill, and not a batch cost.
+  TAX_PAID
+}
+
+/// Which pot an account's money belongs to. Only OPERATING is cash the farm can spend.
+enum Fund {
+  OPERATING
+  REINVEST
+  RESERVE
+}
+
+/// What was decided about a closed batch.
+enum SplitKind {
+  PROFIT
+  LOSS
+  /// From before the feature: left out, with a reason.
+  SKIPPED
+}
+
+/// A TRANSFER that carries out a profit split; an ordinary transfer between accounts has none.
+enum SplitMove {
+  TO_REINVEST
+  TO_RESERVE
+  /// The reserve paying for a loss.
+  FROM_RESERVE
 }
 
 /// Why the farm borrowed. Decides who bears the interest: BATCH = that batch alone (DIRECT, booked
@@ -566,6 +591,7 @@ model Profiles {
   expensesRecorded        Expense[]
   loansRecorded           Loan[]
   supplierPayments        SupplierPayment[]
+  profitSplits            ProfitSplit[]
   salesRecorded           Sale[]
   birdSalesRecorded       BirdSale[]
   environmentRecordsTaken EnvironmentRecords[]
@@ -798,6 +824,7 @@ model Batches {
   vaccineSchedules   BatchVaccineSchedule[]
   diseaseCases       DiseaseCase[]
   loans              Loan[]
+  profitSplit        ProfitSplit?
 
   @@index([status])
 }
@@ -1700,6 +1727,8 @@ model Payment {
   supplier_payment_id String?
   supplier_payment    SupplierPayment? @relation(fields: [supplier_payment_id], references: [id], onDelete: Restrict)
 
+  split_move SplitMove?
+
   @@index([ref_type, ref_id])
   @@index([supplier_payment_id])
   @@index([from_instrument_id])
@@ -1719,6 +1748,8 @@ model PaymentInstrument {
   mobile_no  String?
   mfs_type   MfsType?
   is_active  Boolean       @default(true)
+  /// One active account for REINVEST and one for RESERVE (index PaymentInstrument_one_active_fund).
+  fund       Fund          @default(OPERATING)
   created_at DateTime      @default(now())
 
   payments_from    Payment[]         @relation("PaymentFrom")
@@ -2086,5 +2117,42 @@ model FarmSettings {
   day_start_hour  Int      @default(0)
   /// Days a SOLD batch stays open for late costs/income before it is finalised (CLOSED). 0-60.
   settlement_days Int      @default(7)
+  /// Default shares of a batch's profit, in percent; tax is inside the reserve.
+  split_reinvest  Decimal  @default(50) @db.Decimal(5, 2)
+  split_reserve   Decimal  @default(30) @db.Decimal(5, 2)
+  split_owner     Decimal  @default(20) @db.Decimal(5, 2)
+  split_tax       Decimal  @default(10) @db.Decimal(5, 2)
   updated_at      DateTime @updatedAt
+}
+
+/// The one decision about a closed batch, with the profit frozen as it was then. Nothing else is stored: what is
+/// still to move, the loss carried, the principal waiting and the tax held are worked out from these and from
+/// payments (docs/superpowers/specs/2026-11-23-profit-split-design.md).
+model ProfitSplit {
+  id              String    @id @default(uuid())
+  batch_id        String    @unique
+  batch           Batches   @relation(fields: [batch_id], references: [id], onDelete: Restrict)
+  kind            SplitKind
+  net_profit      Decimal   @db.Decimal(12, 2)
+  /// PROFIT: taken off first for losses carried from earlier batches.
+  recovered       Decimal   @default(0) @db.Decimal(12, 2)
+  pct_reinvest    Decimal   @default(0) @db.Decimal(5, 2)
+  pct_reserve     Decimal   @default(0) @db.Decimal(5, 2)
+  pct_owner       Decimal   @default(0) @db.Decimal(5, 2)
+  pct_tax         Decimal   @default(0) @db.Decimal(5, 2)
+  reinvest        Decimal   @default(0) @db.Decimal(12, 2)
+  reserve         Decimal   @default(0) @db.Decimal(12, 2)
+  owner           Decimal   @default(0) @db.Decimal(12, 2)
+  /// Inside reserve: never used for a loss.
+  tax             Decimal   @default(0) @db.Decimal(12, 2)
+  /// Inside reinvest: loan principal and old debts Operating already paid, so it stays there.
+  principal_taken Decimal   @default(0) @db.Decimal(12, 2)
+  /// LOSS: what the reserve pays. The rest is carried.
+  loss_covered    Decimal   @default(0) @db.Decimal(12, 2)
+  reason          String?
+  approved_by_id  String
+  approved_by     Profiles  @relation(fields: [approved_by_id], references: [id], onDelete: Restrict)
+  approved_at     DateTime  @default(now())
+
+  @@index([approved_at])
 }

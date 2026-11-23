@@ -35,6 +35,9 @@ export function farmDay(instant: Date): Date {
 /** The instant the current farm day began, for "logged today" queries. */
 export const farmDayStart = (now: Date): Date => new Date(farmDay(now).getTime() - shiftMs());
 
+/** The instant every stored date up to the current farm day comes before. */
+export const farmDayEnd = (now: Date): Date => new Date(farmDay(now).getTime() + 86_400_000);
+
 /** Which day of a batch `at` falls on, the farm's way: the placement day is Day 1, the next farm calendar
  * day Day 2. Never below 1. */
 export function cycleDay(startingDate: Date, at: Date = new Date()): number {

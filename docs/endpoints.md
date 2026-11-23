@@ -1,6 +1,6 @@
 # Endpoint index
 
-Every route the API serves (331 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
+Every route the API serves (338 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
 
 For what the fields mean, the error cases and worked examples, see [`api.md`](api.md). For conventions (envelope, pagination, errors, idempotency) see its section 1.
 
@@ -13,7 +13,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 
 ## Contents
 
-[`/health`](#health) · [`/api/auth`](#apiauth) · [`/api/admins`](#apiadmins) · [`/api/devices`](#apidevices) · [`/api/ingest`](#apiingest) · [`/api/employees`](#apiemployees) · [`/api/employee-roles`](#apiemployee-roles) · [`/api/farm-settings`](#apifarm-settings) · [`/api/uploads`](#apiuploads) · [`/api/employee-payout-accounts`](#apiemployee-payout-accounts) · [`/api/payroll-payouts`](#apipayroll-payouts) · [`/api/bonus-events`](#apibonus-events) · [`/api/suppliers`](#apisuppliers) · [`/api/customers`](#apicustomers) · [`/api/doctors`](#apidoctors) · [`/api/houses`](#apihouses) · [`/api/items`](#apiitems) · [`/api/item-units`](#apiitem-units) · [`/api/warehouses`](#apiwarehouses) · [`/api/organizations`](#apiorganizations) · [`/api/item-organizations`](#apiitem-organizations) · [`/api/stock-units`](#apistock-units) · [`/api/stock-house-allocations`](#apistock-house-allocations) · [`/api/assets`](#apiassets) · [`/api/batches`](#apibatches) · [`/api/batch-house-allocations`](#apibatch-house-allocations) · [`/api/mortality-logs`](#apimortality-logs) · [`/api/batch-house-balances`](#apibatch-house-balances) · [`/api/purchases`](#apipurchases) · [`/api/purchase-items`](#apipurchase-items) · [`/api/stock-ledger`](#apistock-ledger) · [`/api/inventory-adjustments`](#apiinventory-adjustments) · [`/api/stock-transfers`](#apistock-transfers) · [`/api/consumptions`](#apiconsumptions) · [`/api/medications`](#apimedications) · [`/api/vaccinations`](#apivaccinations) · [`/api/vaccine-templates`](#apivaccine-templates) · [`/api/vaccine-purposes`](#apivaccine-purposes) · [`/api/diseases`](#apidiseases) · [`/api/disease-cases`](#apidisease-cases) · [`/api/batch-vaccine-schedules`](#apibatch-vaccine-schedules) · [`/api/environment-records`](#apienvironment-records) · [`/api/weight-records`](#apiweight-records) · [`/api/batch-feeding-programs`](#apibatch-feeding-programs) · [`/api/sales`](#apisales) · [`/api/sale-scans`](#apisale-scans) · [`/api/bird-sales`](#apibird-sales) · [`/api/payment-instruments`](#apipayment-instruments) · [`/api/payments`](#apipayments) · [`/api/expenses`](#apiexpenses) · [`/api/loans`](#apiloans) · [`/api/asset-depreciations`](#apiasset-depreciations) · [`/api/performance-score-entries`](#apiperformance-score-entries) · [`/api/payroll-records`](#apipayroll-records) · [`/api/alerts`](#apialerts) · [`/api/notifications`](#apinotifications) · [`/api/audit-logs`](#apiaudit-logs) · [`/api/analytics`](#apianalytics) · [`/api/item-categories`](#apiitem-categories) · [`/api/units`](#apiunits) · [`/api/expense-categories`](#apiexpense-categories) · [`/api/supplier-supply-categories`](#apisupplier-supply-categories) · [`/api/task-types`](#apitask-types) · [`/api/tasks`](#apitasks) · [`/api/task-assignments`](#apitask-assignments)
+[`/health`](#health) · [`/api/auth`](#apiauth) · [`/api/admins`](#apiadmins) · [`/api/devices`](#apidevices) · [`/api/ingest`](#apiingest) · [`/api/employees`](#apiemployees) · [`/api/employee-roles`](#apiemployee-roles) · [`/api/farm-settings`](#apifarm-settings) · [`/api/uploads`](#apiuploads) · [`/api/employee-payout-accounts`](#apiemployee-payout-accounts) · [`/api/payroll-payouts`](#apipayroll-payouts) · [`/api/bonus-events`](#apibonus-events) · [`/api/suppliers`](#apisuppliers) · [`/api/customers`](#apicustomers) · [`/api/doctors`](#apidoctors) · [`/api/houses`](#apihouses) · [`/api/items`](#apiitems) · [`/api/item-units`](#apiitem-units) · [`/api/warehouses`](#apiwarehouses) · [`/api/organizations`](#apiorganizations) · [`/api/item-organizations`](#apiitem-organizations) · [`/api/stock-units`](#apistock-units) · [`/api/stock-house-allocations`](#apistock-house-allocations) · [`/api/assets`](#apiassets) · [`/api/batches`](#apibatches) · [`/api/batch-house-allocations`](#apibatch-house-allocations) · [`/api/mortality-logs`](#apimortality-logs) · [`/api/batch-house-balances`](#apibatch-house-balances) · [`/api/purchases`](#apipurchases) · [`/api/purchase-items`](#apipurchase-items) · [`/api/stock-ledger`](#apistock-ledger) · [`/api/inventory-adjustments`](#apiinventory-adjustments) · [`/api/stock-transfers`](#apistock-transfers) · [`/api/consumptions`](#apiconsumptions) · [`/api/medications`](#apimedications) · [`/api/vaccinations`](#apivaccinations) · [`/api/vaccine-templates`](#apivaccine-templates) · [`/api/vaccine-purposes`](#apivaccine-purposes) · [`/api/diseases`](#apidiseases) · [`/api/disease-cases`](#apidisease-cases) · [`/api/batch-vaccine-schedules`](#apibatch-vaccine-schedules) · [`/api/environment-records`](#apienvironment-records) · [`/api/weight-records`](#apiweight-records) · [`/api/batch-feeding-programs`](#apibatch-feeding-programs) · [`/api/sales`](#apisales) · [`/api/sale-scans`](#apisale-scans) · [`/api/bird-sales`](#apibird-sales) · [`/api/payment-instruments`](#apipayment-instruments) · [`/api/payments`](#apipayments) · [`/api/expenses`](#apiexpenses) · [`/api/loans`](#apiloans) · [`/api/profit-splits`](#apiprofit-splits) · [`/api/asset-depreciations`](#apiasset-depreciations) · [`/api/performance-score-entries`](#apiperformance-score-entries) · [`/api/payroll-records`](#apipayroll-records) · [`/api/alerts`](#apialerts) · [`/api/notifications`](#apinotifications) · [`/api/audit-logs`](#apiaudit-logs) · [`/api/analytics`](#apianalytics) · [`/api/item-categories`](#apiitem-categories) · [`/api/units`](#apiunits) · [`/api/expense-categories`](#apiexpense-categories) · [`/api/supplier-supply-categories`](#apisupplier-supply-categories) · [`/api/task-types`](#apitask-types) · [`/api/tasks`](#apitasks) · [`/api/task-assignments`](#apitask-assignments)
 
 ### `/health`
 
@@ -92,7 +92,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/farm-settings` | Admin | 200 | — | Fetched successfully |
-| PATCH | `/api/farm-settings` | Admin | 200 | body: any of `day_start_hour`, `settlement_days` | Farm settings saved |
+| PATCH | `/api/farm-settings` | Admin | 200 | body: any of `split_reinvest`, `split_reserve`, `split_owner`, `split_tax`, `day_start_hour`, `settlement_days` | Farm settings saved |
 
 ### `/api/uploads`
 
@@ -475,8 +475,8 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | GET | `/api/payment-instruments` | Admin | 200 | query: `page`, `limit`, `is_active` | Payment instruments fetched successfully |
 | GET | `/api/payment-instruments/:id` | Admin | 200 | — | Payment instrument fetched successfully |
 | GET | `/api/payment-instruments/:id/balance` | Admin | 200 | — | Balance computed |
-| POST | `/api/payment-instruments` | Admin | 201 | body: `type`, `label`, `bank_name?`, `account_no?`, `mobile_no?`, `mfs_type?` | Payment instrument created |
-| PATCH | `/api/payment-instruments/:id` | Admin | 200 | body: any of `type`, `label`, `bank_name`, `account_no`, `mobile_no`, `mfs_type` | Payment instrument updated |
+| POST | `/api/payment-instruments` | Admin | 201 | body: `type`, `label`, `bank_name?`, `account_no?`, `mobile_no?`, `mfs_type?`, `fund?` | Payment instrument created |
+| PATCH | `/api/payment-instruments/:id` | Admin | 200 | body: any of `type`, `label`, `bank_name`, `account_no`, `mobile_no`, `mfs_type`, `fund` | Payment instrument updated |
 | POST | `/api/payment-instruments/:id/deactivate` | Admin | 200 | — | Payment instrument deactivated |
 | POST | `/api/payment-instruments/:id/reactivate` | Admin | 200 | — | Payment instrument reactivated |
 | DELETE | `/api/payment-instruments/:id` | Admin | 200 | — | Payment instrument deleted |
@@ -509,6 +509,18 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | POST | `/api/loans` | Admin | 201 | body: `lender`, `purpose`, `batch_id?`, `principal`, `terms`, `annual_rate?`, `total_payable?`, `installment_count`, `frequency`, `first_due_on`, `received_on`, `to_instrument_id?`, `transaction_ref?`, `note?` | Loan recorded |
 | POST | `/api/loans/:id/installments` | Admin | 201 | body: `amount`, `payment_date`, `from_instrument_id`, `interest?`, `transaction_ref?`, `note?` | Installment recorded |
 | DELETE | `/api/loans/:id` | Admin | 200 | — | Loan removed |
+
+### `/api/profit-splits`
+
+| Method | Path | Access | Status | Input | What it does |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/api/profit-splits` | Admin | 200 | — | Profit split fetched |
+| GET | `/api/profit-splits/batch/:batchId` | Admin | 200 | — | Batch decision fetched |
+| POST | `/api/profit-splits` | Admin | 201 | body: `batch_id`, `expected_profit`, `expected?`, `pct?` | Batch decided |
+| POST | `/api/profit-splits/skip` | Admin | 201 | body: `batch_id`, `reason` | Batch skipped |
+| POST | `/api/profit-splits/moves` | Admin | 201 | body: `move`, `amount`, `payment_date`, `operating_instrument_id`, `transaction_ref?`, `note?` | Move recorded |
+| POST | `/api/profit-splits/moves/:paymentId/remove` | Admin | 200 | body: `reason` | Move removed |
+| POST | `/api/profit-splits/:id/undo` | Admin | 200 | body: `reason` | Decision undone |
 
 ### `/api/asset-depreciations`
 

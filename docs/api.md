@@ -1421,8 +1421,8 @@ the customer/supplier on the bill it settles, and employees are paid to their
 | GET | `/api/payment-instruments` | 200 | query: `is_active?` |
 | GET | `/api/payment-instruments/:id` | 200 | — |
 | GET | `/api/payment-instruments/:id/balance` | 200 | `{ instrument_id, incoming, outgoing, balance }` — computed, not stored |
-| POST | `/api/payment-instruments` | 201 | `{ type: PaymentMethod, label, bank_name?, account_no?, mobile_no?, mfs_type? }` |
-| PATCH | `/api/payment-instruments/:id` | 200 | `{ type?, label?, bank_name?, account_no?, mobile_no?, mfs_type? }` |
+| POST | `/api/payment-instruments` | 201 | `{ type: PaymentMethod, label, bank_name?, account_no?, mobile_no?, mfs_type?, fund?: OPERATING\|REINVEST\|RESERVE }` — one active account for each of the last two |
+| PATCH | `/api/payment-instruments/:id` | 200 | `{ type?, label?, bank_name?, account_no?, mobile_no?, mfs_type?, fund? }` — 409 if `fund` changes once money has moved through it, or the fund already has an active account |
 | POST | `/api/payment-instruments/:id/deactivate` | 200 | — |
 | POST | `/api/payment-instruments/:id/reactivate` | 200 | — |
 | DELETE | `/api/payment-instruments/:id` | 200 | — — hard delete, unused instruments only |
@@ -1446,11 +1446,18 @@ Append-only (§1.10).
 | GET | `/api/payments` | 200 | query: `ref_type?`, `ref_id?`, `direction?`, `instrument_id?` (matches either from/to) |
 | GET | `/api/payments/total-paid` | 200 | query (**required**): `ref_type`, `ref_id` → `{ ref_type, ref_id, total_paid }` |
 | GET | `/api/payments/:id` | 200 | — |
-| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE (with `ref_id`) or OWNER_CAPITAL\|OWNER_DRAW\|OTHER_IN\|OTHER_OUT\|TRANSFER (no `ref_id`; OTHER_* need `note`; TRANSFER names both accounts), to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee and loan-interest expenses are refused: they are paid through their payroll payout or loan |
+| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE (with `ref_id`) or OWNER_CAPITAL\|OWNER_DRAW\|OTHER_IN\|OTHER_OUT\|TRANSFER\|TAX_PAID (no `ref_id`; OTHER_* need `note`; TRANSFER names both accounts), to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee and loan-interest expenses are refused: they are paid through their payroll payout or loan |
 | GET | `/api/loans`, `/api/loans/:id` | 200 | loan + `paid`, `left`, `interest_total`, `interest_booked`, `next_due_on`; one loan also lists `payments` (each installment with its `interest`) |
 | POST | `/api/loans` | 201 | `{ lender, purpose: BATCH\|FARM\|LOSS\|OLD_DEBT, batch_id?, principal, terms: EMI\|FLAT\|NONE, annual_rate?, total_payable?, installment_count, frequency: MONTHLY\|WEEKLY\|ONE_OFF, first_due_on, received_on, to_instrument_id?, note? }` |
 | POST | `/api/loans/:id/installments` | 201 | `{ amount, payment_date, from_instrument_id, interest?, transaction_ref?, note? }` — `interest` can't pass what the loan has left, nor leave a repaid loan short of its interest |
 | DELETE | `/api/loans/:id` | 200 | a loan entered by mistake; 409 once an installment is paid |
+| GET | `/api/profit-splits` | 200 | where each fund stands (`reinvest`, `reserve`, `owner`, `carried_loss`, `principal_waiting`, `spendable_cash`), batches `waiting`, decisions `done` (`profit_now` beside the frozen `net_profit`), the last 50 `moves` |
+| POST | `/api/profit-splits` | 201 | `{ batch_id, expected_profit, expected?: { recovered, principal_taken, loss_covered }, pct?: { reinvest, reserve, owner, tax } }` — the oldest closed batch only, and not while a batch that ended earlier is still SOLD; 409 if its profit is no longer `expected_profit`, or what comes off first isn't `expected`. A loss is paid by the reserve, the rest carried |
+| GET | `/api/profit-splits/batch/:batchId` | 200 | that batch's decision (`kind`, `net_profit`, `loss_covered`, `approved_at`), or `null` |
+| POST | `/api/profit-splits/skip` | 201 | `{ batch_id, reason }` — only before the first split or loss |
+| POST | `/api/profit-splits/:id/undo` | 200 | `{ reason }` — the latest decision only |
+| POST | `/api/profit-splits/moves` | 201 | `{ move: TO_REINVEST\|TO_RESERVE\|FROM_RESERVE, amount, payment_date, operating_instrument_id, transaction_ref?, note? }` — up to what is left to move |
+| POST | `/api/profit-splits/moves/:paymentId/remove` | 200 | `{ reason }` |
 
 **Exactly one farm account, on the side the money moved**: money received
 (SALE, BIRD_SALE) names only `to_instrument_id` — where it landed; money paid
@@ -1540,6 +1547,9 @@ for each route are in [`endpoints.md`](./endpoints.md); this section records the
   and income (litter sold, a missed bottle turning up, a late bill). The background scan
   loop moves a batch to **CLOSED** once `actual_end_date + settlement_days` has passed, and
   `POST /api/batches/:id/finalize` does it early.
+- `split_reinvest` / `split_reserve` / `split_owner` / `split_tax` (default 50 / 30 / 20 / 10) are
+  how a closed batch's profit is split. Sent together or not at all: the first three add up to
+  100 and the tax is part of the reserve. Batches already split keep their own.
 - A **CLOSED** batch refuses new or changed money rows: consumption, expenses, and sales that
   name it fail with **409** "Batch X is finalised". Payments against bird-sale dues stay
   allowed, because that is cash collection, not profit and loss.
