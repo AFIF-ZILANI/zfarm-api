@@ -27,7 +27,7 @@ export const lockSupplier = (tx: Tx, supplier_id: string) =>
     tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"supplier:" + supplier_id}, 0))`;
 
 /** The same key writePayment locks a bill on. */
-async function lockBills(tx: Tx, ids: string[]) {
+export async function lockBills(tx: Tx, ids: string[]) {
     for (const id of [...new Set(ids)].sort())
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`;
 }
@@ -41,6 +41,52 @@ export async function advanceHeld(tx: Tx, supplier_id: string) {
     });
     const sum = (d: "INCOMING" | "OUTGOING") => D(rows.find((r) => r.direction === d)?._sum.amount);
     return sum("OUTGOING").minus(sum("INCOMING"));
+}
+
+/** Settles a new bill from the advance held, oldest first. No cash moves: the rows are re-pointed. The
+ * caller holds the supplier's lock. */
+export async function useAdvance(
+    tx: Tx,
+    p: { supplier_id: string; purchase_id: string; amount: Prisma.Decimal },
+) {
+    const held = await advanceHeld(tx, p.supplier_id);
+    if (p.amount.greaterThan(held))
+        throw AppError.badRequest(`This supplier holds an advance of ${held.toFixed(2)}`, {
+            fields: { use_advance: `The advance held is ${held.toFixed(2)}` },
+        });
+    const rows = await tx.payment.findMany({
+        where: { ref_type: "SUPPLIER_ADVANCE", ref_id: p.supplier_id, direction: "OUTGOING" },
+        orderBy: [{ payment_date: "asc" }, { created_at: "asc" }],
+    });
+    const onBill = { ref_type: "PURCHASE" as const, ref_id: p.purchase_id };
+    let left = p.amount;
+    for (const { id, created_at: _, ...row } of rows) {
+        if (!left.greaterThan(0)) break;
+        if (row.amount.lessThanOrEqualTo(left)) {
+            await tx.payment.update({ where: { id }, data: onBill });
+            left = left.minus(row.amount);
+        } else {
+            await tx.payment.update({ where: { id }, data: { amount: row.amount.minus(left) } });
+            await tx.payment.create({ data: { ...row, ...onBill, amount: left } });
+            left = D(0);
+        }
+    }
+}
+
+/** A bill going away: what a supplier payment put on it was still handed over, so it's an advance again.
+ * The caller holds the supplier's lock. */
+export async function returnToAdvance(tx: Tx, p: { supplier_id: string; purchase_id: string }) {
+    const where = {
+        ref_type: "PURCHASE" as const,
+        ref_id: p.purchase_id,
+        supplier_payment_id: { not: null },
+    };
+    const rows = await tx.payment.findMany({ where });
+    await tx.payment.updateMany({
+        where,
+        data: { ref_type: "SUPPLIER_ADVANCE", ref_id: p.supplier_id },
+    });
+    return rows;
 }
 
 async function openingLeft(tx: Tx, supplier_id: string, opening_due: Prisma.Decimal) {

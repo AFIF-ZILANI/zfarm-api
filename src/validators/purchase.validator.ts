@@ -42,7 +42,15 @@ export const addPurchaseChargeSchema = z
 
 export const createPurchaseSchema = z
     .object({
-        supplier_id: z.string().uuid().optional(),
+        // Every bill is somebody's, or it reaches no supplier's statement.
+        supplier_id: z.string({ error: "Select the supplier" }).uuid("Select the supplier"),
+        // How much of the advance this supplier holds settles the bill (optional, not .default(0): a
+        // default makes it required for in-process callers).
+        use_advance: z.coerce
+            .number()
+            .nonnegative()
+            .multipleOf(0.01, "Use at most two decimals")
+            .optional(),
         warehouse_id: z.string().uuid(),
         invoice_no: z.string().optional(),
         purchase_date: z.coerce.date(),
@@ -77,7 +85,11 @@ export const completePurchaseItemSchema = z.object({
     unit_count: z.number().int().min(1).max(10000),
 });
 
-export type CreatePurchaseInput = z.infer<typeof createPurchaseSchema> & { recorded_by_id: string };
+/** In-process callers may leave the supplier out (older purchases had none); the API can't. */
+export type CreatePurchaseInput = Omit<z.infer<typeof createPurchaseSchema>, "supplier_id"> & {
+    supplier_id?: string | undefined;
+    recorded_by_id: string;
+};
 export type PurchaseChargeInput = z.infer<typeof purchaseChargeInput>;
 export type AddPurchaseChargeInput = z.infer<typeof addPurchaseChargeSchema> & {
     recorded_by_id: string;
