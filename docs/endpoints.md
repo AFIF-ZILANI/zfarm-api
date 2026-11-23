@@ -1,6 +1,6 @@
 # Endpoint index
 
-Every route the API serves (323 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
+Every route the API serves (330 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
 
 For what the fields mean, the error cases and worked examples, see [`api.md`](api.md). For conventions (envelope, pagination, errors, idempotency) see its section 1.
 
@@ -135,11 +135,18 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/suppliers` | Admin | 200 | query: `page`, `limit`, `role`, `supplies`, `is_active` | Suppliers fetched successfully |
+| GET | `/api/suppliers/balances` | Admin | 200 | — | Supplier balances fetched |
 | GET | `/api/suppliers/:id` | Admin | 200 | — | Supplier fetched successfully |
 | POST | `/api/suppliers` | Admin | 201 | body: `name`, `mobile`, `email?`, `address?`, `role`, `supplies`, `company?` | Supplier created |
 | PATCH | `/api/suppliers/:id` | Admin | 200 | body: any of `name`, `mobile`, `email`, `address`, `role`, `supplies`, `company` | Supplier updated |
 | POST | `/api/suppliers/:id/deactivate` | Admin | 200 | — | Supplier deactivated |
 | POST | `/api/suppliers/:id/reactivate` | Admin | 200 | — | Supplier reactivated |
+| GET | `/api/suppliers/:id/dues` | Admin | 200 | — | Supplier dues fetched |
+| GET | `/api/suppliers/:id/statement` | Admin | 200 | query: `from`, `to` | Supplier statement fetched |
+| POST | `/api/suppliers/:id/payments` | Admin | 201 | body: `amount`, `payment_date`, `transaction_ref?`, `note?`, `from_instrument_id`, `split?` | Supplier paid |
+| POST | `/api/suppliers/:id/payments/:paymentId/remove` | Admin | 200 | body: `reason` | Supplier payment removed |
+| POST | `/api/suppliers/:id/refunds` | Admin | 201 | body: `amount`, `payment_date`, `transaction_ref?`, `note?`, `to_instrument_id` | Refund recorded |
+| PATCH | `/api/suppliers/:id/opening` | Admin | 200 | body: `opening_due`, `opening_date`, `opening_note?` | Old balance saved |
 
 ### `/api/customers`
 
@@ -302,7 +309,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | GET | `/api/purchases` | Admin | 200 | query: `page`, `limit`, `supplier_id`, `date_from`, `date_to`, `item_category` | List |
 | GET | `/api/purchases/:id` | Admin | 200 | — | Get one |
 | DELETE | `/api/purchases/:id` | Admin | 200 | — | Delete |
-| POST | `/api/purchases` | Admin | 201 | body: `supplier_id?`, `warehouse_id`, `invoice_no?`, `purchase_date`, `paid_amount?`, `paid_from_instrument_id?`, `payment_date?`, `payment_transaction_ref?`, `payment_note?`, `items`, `charges?` | Create |
+| POST | `/api/purchases` | Admin | 201 | body: `supplier_id`, `use_advance?`, `warehouse_id`, `invoice_no?`, `purchase_date`, `paid_amount?`, `paid_from_instrument_id?`, `payment_date?`, `payment_transaction_ref?`, `payment_note?`, `items`, `charges?` | Create |
 | POST | `/api/purchases/:id/charges` | Admin | 200 | body: `category`, `amount`, `remarks?`, `paid_amount?`, `paid_from_instrument_id?`, `date?` | Add charge |
 
 ### `/api/purchase-items`
