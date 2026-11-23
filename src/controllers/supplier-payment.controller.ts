@@ -11,6 +11,7 @@ import type {
     RefundInput,
     RemovePaymentInput,
     StatementQuery,
+    UseAdvanceInput,
 } from "@validators/supplier-payment.validator";
 
 const id = (c: Context) => c.req.param("id") ?? "";
@@ -48,6 +49,18 @@ export const SupplierPaymentController = {
                 "Supplier paid",
                 201,
             );
+        });
+    },
+
+    async useAdvance(c: Context) {
+        return withHandler(c, async () => {
+            const body = getValid<UseAdvanceInput>(c, "json");
+            const result = await SupplierPaymentService.useAdvance(
+                id(c),
+                body,
+                await getActorId(c),
+            );
+            return sendSuccess(c, result, "Advance used");
         });
     },
 

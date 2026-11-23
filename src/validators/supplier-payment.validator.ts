@@ -15,17 +15,20 @@ const common = {
     note: z.string().trim().min(1).optional(),
 };
 
+/** What an amount settles; whatever it doesn't name stays an advance. Omitted: oldest dues first. */
+const splitInput = z.object({
+    opening: taka.optional(),
+    bills: z.array(z.object({ purchase_id: z.string().uuid(), amount: taka })).max(500),
+});
+
 export const payInput = z.object({
     ...common,
     from_instrument_id: z.string().uuid(),
-    /** What the amount settles; whatever it doesn't name is kept as an advance. Omitted: oldest dues first. */
-    split: z
-        .object({
-            opening: taka.optional(),
-            bills: z.array(z.object({ purchase_id: z.string().uuid(), amount: taka })).max(500),
-        })
-        .optional(),
+    split: splitInput.optional(),
 });
+
+/** Settles what is already due from the advance the supplier holds. */
+export const useAdvanceSchema = z.object({ split: splitInput.optional() });
 
 /** Money a supplier gives back, out of the advance they hold. */
 export const refundSchema = z.object({ ...common, to_instrument_id: z.string().uuid() });
@@ -49,6 +52,7 @@ export const statementQuerySchema = z.object({ from: day, to: day });
 
 export type StatementQuery = z.infer<typeof statementQuerySchema>;
 export type PaySupplierInput = z.infer<typeof payInput> & { recorded_by_id: string };
+export type UseAdvanceInput = z.infer<typeof useAdvanceSchema>;
 export type RefundInput = z.infer<typeof refundSchema> & { recorded_by_id: string };
 export type RemovePaymentInput = z.infer<typeof removePaymentSchema>;
 export type OpeningInput = z.infer<typeof openingSchema>;

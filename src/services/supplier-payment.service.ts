@@ -9,6 +9,7 @@ import type {
     OpeningInput,
     PaySupplierInput,
     RefundInput,
+    UseAdvanceInput,
 } from "@validators/supplier-payment.validator";
 
 /**
@@ -43,11 +44,11 @@ export async function advanceHeld(tx: Tx, supplier_id: string) {
     return sum("OUTGOING").minus(sum("INCOMING"));
 }
 
-/** Settles a new bill from the advance held, oldest first. No cash moves: the rows are re-pointed. The
- * caller holds the supplier's lock. */
+/** Settles a bill (or, with no purchase_id, the old balance) from the advance held, oldest advance first. No
+ * cash moves: the rows are re-pointed. The caller holds the supplier's lock. */
 export async function useAdvance(
     tx: Tx,
-    p: { supplier_id: string; purchase_id: string; amount: Prisma.Decimal },
+    p: { supplier_id: string; purchase_id: string | null; amount: Prisma.Decimal },
 ) {
     const held = await advanceHeld(tx, p.supplier_id);
     if (p.amount.greaterThan(held))
@@ -58,16 +59,19 @@ export async function useAdvance(
         where: { ref_type: "SUPPLIER_ADVANCE", ref_id: p.supplier_id, direction: "OUTGOING" },
         orderBy: [{ payment_date: "asc" }, { created_at: "asc" }],
     });
-    const onBill = { ref_type: "PURCHASE" as const, ref_id: p.purchase_id };
+    const settles =
+        p.purchase_id === null
+            ? { ref_type: "SUPPLIER_OPENING" as const, ref_id: p.supplier_id }
+            : { ref_type: "PURCHASE" as const, ref_id: p.purchase_id };
     let left = p.amount;
     for (const { id, created_at: _, ...row } of rows) {
         if (!left.greaterThan(0)) break;
         if (row.amount.lessThanOrEqualTo(left)) {
-            await tx.payment.update({ where: { id }, data: onBill });
+            await tx.payment.update({ where: { id }, data: settles });
             left = left.minus(row.amount);
         } else {
             await tx.payment.update({ where: { id }, data: { amount: row.amount.minus(left) } });
-            await tx.payment.create({ data: { ...row, ...onBill, amount: left } });
+            await tx.payment.create({ data: { ...row, ...settles, amount: left } });
             left = D(0);
         }
     }
@@ -160,7 +164,7 @@ function editedSplit(
     }
     const advance = parts.reduce((left, b) => left.minus(b.amount), amount.minus(opening));
     if (advance.isNegative())
-        throw AppError.badRequest("The parts add up to more than the amount paid");
+        throw AppError.badRequest("The parts add up to more than there is to share out");
     return { opening, bills: parts, advance };
 }
 
@@ -259,6 +263,42 @@ export const SupplierPaymentService = {
         } catch (err) {
             return handlePrismaWriteError(err);
         }
+    },
+
+    /** Settles dues already there from the advance held -- paid ahead, or left over from a removed bill. */
+    async useAdvance(supplier_id: string, data: UseAdvanceInput, actor_id: string) {
+        return prisma.$transaction(async (tx) => {
+            await lockSupplier(tx, supplier_id);
+            const supplier = await requireSupplier(tx, supplier_id);
+            const held = await advanceHeld(tx, supplier_id);
+            if (!held.greaterThan(0)) throw AppError.badRequest("This supplier holds no advance");
+            await lockBills(
+                tx,
+                (await openBills(tx, supplier_id)).map((b) => b.id),
+            );
+            const bills = await openBills(tx, supplier_id);
+            const left = await openingLeft(tx, supplier_id, supplier.opening_due);
+            const parts = data.split
+                ? editedSplit(held, data.split, left, bills)
+                : splitOldestFirst(held, left, bills);
+            const used = held.minus(parts.advance);
+            if (!used.greaterThan(0)) throw AppError.badRequest("There's nothing due to use it on");
+
+            if (parts.opening.greaterThan(0))
+                await useAdvance(tx, { supplier_id, purchase_id: null, amount: parts.opening });
+            for (const b of parts.bills)
+                await useAdvance(tx, { supplier_id, purchase_id: b.id, amount: b.amount });
+            await audit(tx, {
+                table: "Suppliers",
+                record_id: supplier_id,
+                action: "UPDATE",
+                actor_id,
+                note: "Advance used on dues",
+                before: { advance: held.toFixed(2) },
+                after: JSON.parse(JSON.stringify(parts)),
+            });
+            return { used: used.toFixed(2), advance: parts.advance.toFixed(2) };
+        });
     },
 
     async refund(supplier_id: string, data: RefundInput) {

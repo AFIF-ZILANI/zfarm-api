@@ -126,6 +126,17 @@ describe("/suppliers money", () => {
             expect([m, p, s >= 400 && s < 500]).toEqual([m, p, true]);
         }
     });
+    test("use an advance over HTTP: 400 with nothing to use it on, 404 for an unknown supplier", async () => {
+        expect((await call("POST", `/suppliers/${id}/use-advance`, {})).status).toBe(400);
+        expect((await call("POST", "/suppliers/unknown/use-advance", {})).status).toBe(404);
+        expect(
+            (
+                await call("POST", `/suppliers/${id}/use-advance`, {
+                    split: { bills: [{ purchase_id: "x", amount: 1 }] },
+                })
+            ).status,
+        ).toBe(400);
+    });
     test("parts of a supplier payment can't be authored as plain payments", async () => {
         for (const ref_type of ["SUPPLIER_ADVANCE", "SUPPLIER_OPENING"])
             expect(
@@ -155,6 +166,7 @@ describe("/suppliers money", () => {
             ["GET", "statement"],
             ["POST", "payments"],
             ["POST", "refunds"],
+            ["POST", "use-advance"],
             ["PATCH", "opening"],
             ["POST", "payments/x/remove"],
         ] as const)

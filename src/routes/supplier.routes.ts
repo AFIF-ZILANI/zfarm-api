@@ -8,6 +8,7 @@ import {
     refundSchema,
     removePaymentSchema,
     statementQuerySchema,
+    useAdvanceSchema,
 } from "@validators/supplier-payment.validator";
 import {
     createSupplierSchema,
@@ -54,6 +55,11 @@ supplierRoutes.post(
     "/:id/payments/:paymentId/remove",
     zValidatorRfc7807("json", removePaymentSchema),
     SupplierPaymentController.remove,
+);
+supplierRoutes.post(
+    "/:id/use-advance",
+    zValidatorRfc7807("json", useAdvanceSchema),
+    SupplierPaymentController.useAdvance,
 );
 supplierRoutes.post(
     "/:id/refunds",

@@ -8,7 +8,7 @@ import { PurchaseService } from "./purchase.service";
 import { SupplierPaymentService } from "./supplier-payment.service";
 import { SupplierStatementService } from "./supplier-statement.service";
 import { createPurchaseSchema } from "@validators/purchase.validator";
-import { payInput, refundSchema } from "@validators/supplier-payment.validator";
+import { payInput, refundSchema, useAdvanceSchema } from "@validators/supplier-payment.validator";
 import {
     cleanSuppliers,
     makeAccount,
@@ -194,6 +194,132 @@ describe("a new bill uses the advance", () => {
         const b = await profit();
         await buy(500, { supplier_id: id, use_advance: 500 });
         expect([b, await profit()]).toEqual([a, a]);
+    });
+});
+
+describe("using an advance on what's already due", () => {
+    const use = (id: string, split?: Record<string, unknown>) =>
+        SupplierPaymentService.useAdvance(
+            id,
+            useAdvanceSchema.parse(split === undefined ? {} : { split }),
+            profileId,
+        );
+    /** 100 held while bills are due: paid ahead on purpose, nothing settled. */
+    const ahead = (id: string, amount: number, d = 1) =>
+        pay(id, amount, d, { split: { bills: [] } });
+
+    test("oldest dues first, old balance before bills; no cash moves; the statement's balance doesn't change", async () => {
+        const id = await supplier();
+        await SupplierPaymentService.setOpening(
+            id,
+            { opening_due: 30, opening_date: at(1) },
+            profileId,
+        );
+        const newer = await buy(100, { supplier_id: id, purchase_date: at(12) });
+        const older = await buy(50, { supplier_id: id, purchase_date: at(3) });
+        await ahead(id, 100);
+        const before = [await cash(), (await SupplierStatementService.statement(id, {})).closing];
+        const r = await use(id);
+        expect(r).toEqual({ used: "100.00", advance: "0.00" });
+        expect([await due(older.id), await due(newer.id)]).toEqual([0, 80]);
+        expect((await SupplierPaymentService.dues(id)).opening_left).toBe("0.00");
+        expect([await cash(), (await SupplierStatementService.statement(id, {})).closing]).toEqual(
+            before,
+        );
+        expect(await groupSums(id)).toEqual([[100, 100]]);
+    });
+    test("an advance bigger than the dues keeps the rest", async () => {
+        const id = await supplier();
+        const b = await buy(40, { supplier_id: id });
+        await ahead(id, 100);
+        expect(await use(id)).toEqual({ used: "40.00", advance: "60.00" });
+        expect([await due(b.id), await advance(id)]).toEqual([0, 60]);
+    });
+    test("an edited split uses only what it names, across several payments, oldest first", async () => {
+        const id = await supplier();
+        const a = await buy(100, { supplier_id: id, purchase_date: at(3) });
+        const b = await buy(100, { supplier_id: id, purchase_date: at(4) });
+        await ahead(id, 50, 5);
+        await ahead(id, 50, 2);
+        expect(await use(id, { bills: [{ purchase_id: b.id, amount: 70 }] })).toEqual({
+            used: "70.00",
+            advance: "30.00",
+        });
+        expect([await due(a.id), await due(b.id)]).toEqual([100, 30]);
+        expect(await groupSums(id)).toEqual([
+            [50, 50],
+            [50, 50],
+        ]);
+    });
+    test("refused, nothing changed: no advance, nothing due, too much, another's bill, an empty split, unknown supplier", async () => {
+        const none = await supplier();
+        await buy(100, { supplier_id: none });
+        expect(await status(use(none))).toBe(400);
+        const id = await supplier();
+        await ahead(id, 50);
+        expect(await status(use(id))).toBe(400);
+        const b = await buy(100, { supplier_id: id });
+        const other = await buy(100, { supplier_id: none });
+        expect(await status(use(id, { bills: [{ purchase_id: b.id, amount: 50.01 }] }))).toBe(400);
+        expect(await status(use(id, { bills: [{ purchase_id: other.id, amount: 10 }] }))).toBe(400);
+        expect(await status(use(id, { bills: [{ purchase_id: b.id, amount: 101 }] }))).toBe(400);
+        expect(await status(use(id, { opening: 5, bills: [] }))).toBe(400);
+        expect(await status(use(id, { bills: [] }))).toBe(400);
+        expect(await status(use(crypto.randomUUID()))).toBe(404);
+        expect([await due(b.id), await advance(id)]).toEqual([100, 50]);
+    });
+    test("what was given back isn't there to use", async () => {
+        const id = await supplier();
+        const b = await buy(100, { supplier_id: id });
+        await ahead(id, 100);
+        await SupplierPaymentService.refund(id, {
+            ...refundSchema.parse({ amount: 70, payment_date: at(2), to_instrument_id: account }),
+            recorded_by_id: profileId,
+        });
+        expect(await use(id)).toEqual({ used: "30.00", advance: "0.00" });
+        expect(await due(b.id)).toBe(70);
+    });
+    test("used, paid and paid on the bill at once: never overpaid, groups add up", async () => {
+        for (let i = 0; i < 10; i++) {
+            const id = await supplier();
+            const b = await buy(100, { supplier_id: id });
+            await ahead(id, 80);
+            await Promise.all([
+                status(use(id)),
+                status(use(id)),
+                status(pay(id, 60, 11)),
+                status(
+                    PaymentService.create({
+                        ref_type: "PURCHASE",
+                        ref_id: b.id,
+                        amount: 50,
+                        payment_date: at(11),
+                        from_instrument_id: account,
+                    }),
+                ),
+            ]);
+            expect(await due(b.id)).toBeGreaterThanOrEqual(0);
+            for (const [amount, parts] of await groupSums(id)) expect(parts).toBe(amount);
+            const st = Number((await SupplierStatementService.statement(id, {})).closing);
+            expect(st).toBe((await due(b.id)) - (await advance(id)));
+        }
+    });
+    test("it's in the audit log, and profit doesn't move", async () => {
+        const id = await supplier();
+        const b = await buy(100, { supplier_id: id });
+        await ahead(id, 100);
+        const profit = async () =>
+            (await FinanceService.summary({ from: at(1), to: at(1, 6) })).current.net_profit;
+        const before = await profit();
+        await use(id);
+        expect(await profit()).toBe(before);
+        const log = await prisma.auditLog.findFirstOrThrow({
+            where: { table_name: "Suppliers", record_id: id, note: { contains: "Advance used" } },
+        });
+        expect([log.changed_by_id, JSON.stringify(log.after_data).includes(b.id)]).toEqual([
+            profileId,
+            true,
+        ]);
     });
 });
 
