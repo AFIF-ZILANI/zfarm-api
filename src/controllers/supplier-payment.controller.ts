@@ -4,16 +4,32 @@ import { withHandler } from "@lib/helper";
 import { sendSuccess } from "@lib/response";
 import { getValid } from "@lib/valid";
 import { SupplierPaymentService } from "@services/supplier-payment.service";
+import { SupplierStatementService } from "@services/supplier-statement.service";
 import type {
     OpeningInput,
     PaySupplierInput,
     RefundInput,
     RemovePaymentInput,
+    StatementQuery,
 } from "@validators/supplier-payment.validator";
 
 const id = (c: Context) => c.req.param("id") ?? "";
 
 export const SupplierPaymentController = {
+    async statement(c: Context) {
+        return withHandler(c, async () => {
+            const query = getValid<StatementQuery>(c, "query");
+            const data = await SupplierStatementService.statement(id(c), query);
+            return sendSuccess(c, data, "Supplier statement fetched");
+        });
+    },
+
+    async balances(c: Context) {
+        return withHandler(c, async () =>
+            sendSuccess(c, await SupplierStatementService.balances(), "Supplier balances fetched"),
+        );
+    },
+
     async dues(c: Context) {
         return withHandler(c, async () =>
             sendSuccess(c, await SupplierPaymentService.dues(id(c)), "Supplier dues fetched"),

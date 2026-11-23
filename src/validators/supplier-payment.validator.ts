@@ -41,6 +41,13 @@ export const openingSchema = z.object({
     opening_note: z.string().trim().min(1).optional(),
 });
 
+const day = z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+    .optional();
+export const statementQuerySchema = z.object({ from: day, to: day });
+
+export type StatementQuery = z.infer<typeof statementQuerySchema>;
 export type PaySupplierInput = z.infer<typeof payInput> & { recorded_by_id: string };
 export type RefundInput = z.infer<typeof refundSchema> & { recorded_by_id: string };
 export type RemovePaymentInput = z.infer<typeof removePaymentSchema>;

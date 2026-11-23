@@ -79,6 +79,11 @@ describe("/suppliers money", () => {
             ).status,
         ).toBe(201);
         expect((await call("GET", `/suppliers/${id}/dues`)).body.data.advance).toBe("150.00");
+        const st = (await call("GET", `/suppliers/${id}/statement?from=2003-01-02`)).body
+            .data as unknown as { brought_forward: string; closing: string };
+        expect([st.brought_forward, st.closing]).toEqual(["100.00", "-150.00"]);
+        expect((await call("GET", `/suppliers/${id}/statement?from=nope`)).status).toBe(400);
+        expect(JSON.stringify((await call("GET", "/suppliers/balances")).body.data)).toContain(id);
         expect(
             (
                 await call("POST", `/suppliers/${id}/payments/${paid.body.data.id}/remove`, {

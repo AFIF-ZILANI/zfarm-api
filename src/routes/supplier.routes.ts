@@ -7,6 +7,7 @@ import {
     payInput,
     refundSchema,
     removePaymentSchema,
+    statementQuerySchema,
 } from "@validators/supplier-payment.validator";
 import {
     createSupplierSchema,
@@ -21,6 +22,8 @@ supplierRoutes.get(
     zValidatorRfc7807("query", listSuppliersQuerySchema),
     SupplierController.getAll,
 );
+// Before /:id, which would take "balances" for an id.
+supplierRoutes.get("/balances", SupplierPaymentController.balances);
 supplierRoutes.get("/:id", SupplierController.getById);
 supplierRoutes.post(
     "/",
@@ -37,6 +40,11 @@ supplierRoutes.post("/:id/reactivate", SupplierController.reactivate);
 
 // Money with the supplier -- admin only: no employee rule in lib/permissions.ts names /suppliers.
 supplierRoutes.get("/:id/dues", SupplierPaymentController.dues);
+supplierRoutes.get(
+    "/:id/statement",
+    zValidatorRfc7807("query", statementQuerySchema),
+    SupplierPaymentController.statement,
+);
 supplierRoutes.post(
     "/:id/payments",
     zValidatorRfc7807("json", payInput),
