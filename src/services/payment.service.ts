@@ -133,7 +133,11 @@ export const PaymentService = {
         const where = {
             ...(query.ref_type !== undefined && { ref_type: query.ref_type }),
             ...(query.ref_id !== undefined && { ref_id: query.ref_id }),
-            ...(query.direction !== undefined && { direction: query.direction }),
+            // A transfer is stored OUTGOING but is neither money in nor out, so no direction lists it.
+            ...(query.direction !== undefined && {
+                direction: query.direction,
+                ...(query.ref_type === undefined && { ref_type: { not: "TRANSFER" as const } }),
+            }),
             ...(query.instrument_id !== undefined && {
                 OR: [
                     { from_instrument_id: query.instrument_id },
@@ -173,7 +177,8 @@ export const PaymentService = {
     async paidByRef(ref_type: RefType) {
         const grouped = await prisma.payment.groupBy({
             by: ["ref_id"],
-            where: { ref_type },
+            // Only what settles the bill: the money a loan brought in shares its ref.
+            where: { ref_type, direction: DIRECTION[ref_type] },
             _sum: { amount: true },
         });
         return grouped.map((row) => ({
@@ -193,7 +198,7 @@ export const PaymentService = {
      * substitute for mutating the referenced record's due_amount. */
     async getTotalPaidForRef(ref_type: RefType, ref_id: string) {
         const result = await prisma.payment.aggregate({
-            where: { ref_type, ref_id },
+            where: { ref_type, ref_id, direction: DIRECTION[ref_type] },
             _sum: { amount: true },
         });
         return { ref_type, ref_id, total_paid: result._sum.amount ?? new Prisma.Decimal(0) };

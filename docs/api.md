@@ -1430,7 +1430,11 @@ Append-only (§1.10).
 | GET | `/api/payments` | 200 | query: `ref_type?`, `ref_id?`, `direction?`, `instrument_id?` (matches either from/to) |
 | GET | `/api/payments/total-paid` | 200 | query (**required**): `ref_type`, `ref_id` → `{ ref_type, ref_id, total_paid }` |
 | GET | `/api/payments/:id` | 200 | — |
-| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE, ref_id, to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee expenses are refused: they are paid through their payroll payout |
+| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE (with `ref_id`) or OWNER_CAPITAL\|OWNER_DRAW\|OTHER_IN\|OTHER_OUT\|TRANSFER (no `ref_id`; OTHER_* need `note`; TRANSFER names both accounts), to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee and loan-interest expenses are refused: they are paid through their payroll payout or loan |
+| GET | `/api/loans`, `/api/loans/:id` | 200 | loan + `paid`, `left`, `interest_total`, `interest_booked`, `next_due_on`; one loan also lists `payments` (each installment with its `interest`) |
+| POST | `/api/loans` | 201 | `{ lender, purpose: BATCH\|FARM\|LOSS\|OLD_DEBT, batch_id?, principal, terms: EMI\|FLAT\|NONE, annual_rate?, total_payable?, installment_count, frequency: MONTHLY\|WEEKLY\|ONE_OFF, first_due_on, received_on, to_instrument_id?, note? }` |
+| POST | `/api/loans/:id/installments` | 201 | `{ amount, payment_date, from_instrument_id, interest?, transaction_ref?, note? }` — `interest` can't pass what the loan has left, nor leave a repaid loan short of its interest |
+| DELETE | `/api/loans/:id` | 200 | a loan entered by mistake; 409 once an installment is paid |
 
 **Exactly one farm account, on the side the money moved**: money received
 (SALE, BIRD_SALE) names only `to_instrument_id` — where it landed; money paid

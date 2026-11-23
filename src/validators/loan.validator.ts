@@ -1,16 +1,23 @@
 import { z } from "zod";
 
+/** Whole paisa, and no more than Payment.amount / Expense.amount (numeric(10,2)) can hold. */
+const taka = z.coerce
+    .number()
+    .positive("Amount must be positive")
+    .max(99_999_999.99, "That's more than one payment can hold")
+    .multipleOf(0.01, "Use at most two decimals");
+
 export const createLoanSchema = z
     .object({
         lender: z.string().trim().min(1, "Say who lent the money"),
         purpose: z.enum(["BATCH", "FARM", "LOSS", "OLD_DEBT"]),
         batch_id: z.string().uuid().optional(),
-        principal: z.coerce.number().positive("Amount must be positive"),
+        principal: taka,
         terms: z.enum(["EMI", "FLAT", "NONE"]),
         /** EMI: yearly percent, e.g. 12.5. */
-        annual_rate: z.coerce.number().positive().max(100).optional(),
+        annual_rate: z.coerce.number().min(0.001).max(100).optional(),
         /** FLAT: the total the lender says to repay. */
-        total_payable: z.coerce.number().positive().optional(),
+        total_payable: taka.optional(),
         installment_count: z.coerce.number().int().positive().max(600),
         frequency: z.enum(["MONTHLY", "WEEKLY", "ONE_OFF"]),
         first_due_on: z.coerce.date(),
@@ -41,6 +48,8 @@ export const createLoanSchema = z
         } else if (d.total_payable !== undefined) {
             issue("total_payable", "Only a flat-rate loan states its total");
         }
+        if (d.first_due_on < d.received_on)
+            issue("first_due_on", "The first installment can't be due before the loan's own date");
         if (d.frequency === "ONE_OFF" && d.installment_count !== 1)
             issue("installment_count", "A one-off repayment is one installment");
         if (d.purpose === "OLD_DEBT") {
@@ -53,11 +62,15 @@ export const createLoanSchema = z
 
 export const payInstallmentSchema = z
     .object({
-        amount: z.coerce.number().positive("Amount must be positive"),
+        amount: taka,
         payment_date: z.coerce.date(),
         from_instrument_id: z.string().uuid(),
         /** The interest part, as on the lender's statement. Omitted: the loan's own share of interest. */
-        interest: z.coerce.number().nonnegative().optional(),
+        interest: z.coerce
+            .number()
+            .nonnegative()
+            .multipleOf(0.01, "Use at most two decimals")
+            .optional(),
         transaction_ref: z.string().optional(),
         note: z.string().trim().optional(),
     })

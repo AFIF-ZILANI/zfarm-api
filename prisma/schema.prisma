@@ -1602,25 +1602,28 @@ model BirdSaleHouse {
 // ════════════════════════════════════════════════════════════════════
 
 model Expense {
-  id             String                @id @default(uuid())
-  batch_id       String?
-  batch          Batches?              @relation(fields: [batch_id], references: [id])
+  id              String                @id @default(uuid())
+  batch_id        String?
+  batch           Batches?              @relation(fields: [batch_id], references: [id])
   // Set exactly when cost_type = STOCK (CHECK Expense_stock_is_purchase_charge): the charge is split
   // over this purchase's lines by value and costed with the stock (lib/purchase-charges.ts).
-  purchase_id    String?
-  purchase       Purchase?             @relation(fields: [purchase_id], references: [id], onDelete: Restrict)
+  purchase_id     String?
+  purchase        Purchase?             @relation(fields: [purchase_id], references: [id], onDelete: Restrict)
   // Set on LOAN_INTEREST rows: which loan's interest this is.
-  loan_id        String?
-  loan           Loan?                 @relation(fields: [loan_id], references: [id], onDelete: Restrict)
-  category       String
-  categoryRef    ExpenseCategoryLookup @relation(fields: [category], references: [code], onUpdate: Cascade)
-  cost_type      CostType
-  amount         Decimal               @db.Decimal(10, 2)
-  date           DateTime
-  remarks        String?
-  recorded_by_id String
-  recorded_by    Profiles              @relation(fields: [recorded_by_id], references: [id])
-  created_at     DateTime              @default(now())
+  loan_id         String?
+  loan            Loan?                 @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+  // The installment this interest was part of. Null on a batch loan's up-front interest.
+  loan_payment_id String?               @unique
+  loan_payment    Payment?              @relation(fields: [loan_payment_id], references: [id], onDelete: Restrict)
+  category        String
+  categoryRef     ExpenseCategoryLookup @relation(fields: [category], references: [code], onUpdate: Cascade)
+  cost_type       CostType
+  amount          Decimal               @db.Decimal(10, 2)
+  date            DateTime
+  remarks         String?
+  recorded_by_id  String
+  recorded_by     Profiles              @relation(fields: [recorded_by_id], references: [id])
+  created_at      DateTime              @default(now())
 
   @@index([batch_id, date])
   @@index([purchase_id])
@@ -1677,6 +1680,9 @@ model Payment {
   handled_by         Profiles?          @relation(fields: [handled_by_id], references: [id])
   note               String?
   created_at         DateTime           @default(now())
+
+  /// LOAN installments: the interest part, when it was a cost of its own.
+  loan_interest Expense?
 
   @@index([ref_type, ref_id])
   @@index([from_instrument_id])

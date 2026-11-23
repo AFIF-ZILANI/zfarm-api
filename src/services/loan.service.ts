@@ -43,20 +43,42 @@ export function loanSchedule(d: {
             .dividedBy(100)
             .dividedBy(PERIODS_PER_YEAR[d.frequency as "MONTHLY" | "WEEKLY"]);
         const installment = money(p.times(r).dividedBy(D(1).minus(D(1).plus(r).pow(-n))));
-        return { installment_amount: installment, total_payable: installment.times(n) };
+        // Rounding a near-zero rate's installment down must not make the total less than was borrowed.
+        const total = Prisma.Decimal.max(installment.times(n), p);
+        return { installment_amount: installment, total_payable: total };
     }
     const total = d.terms === "FLAT" ? D(d.total_payable!) : p;
     // ponytail: rounded per installment; the last one is simply whatever is left.
     return { installment_amount: money(total.dividedBy(n)), total_payable: total };
 }
 
-/** Date of installment number k (0-based). */
+/** Date of installment number k (0-based). A month without that day uses its last one (31 Jan -> 28 Feb). */
 function dueOn(first: Date, frequency: string, k: number) {
     const d = new Date(first);
-    if (frequency === "MONTHLY") d.setUTCMonth(d.getUTCMonth() + k);
-    else if (frequency === "WEEKLY") d.setUTCDate(d.getUTCDate() + 7 * k);
+    if (frequency === "WEEKLY") d.setUTCDate(d.getUTCDate() + 7 * k);
+    if (frequency === "MONTHLY") {
+        d.setUTCDate(1);
+        d.setUTCMonth(d.getUTCMonth() + k);
+        const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+        d.setUTCDate(Math.min(first.getUTCDate(), last));
+    }
     return d;
 }
+
+/** numeric(10,2), the column every installment and interest amount is stored in. */
+const MAX_AMOUNT = 99_999_999.99;
+
+/** One writer per loan at a time: installments, and removing it. Same key writePayment locks on. */
+const lockLoan = (tx: Prisma.TransactionClient, id: string) =>
+    tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`;
+
+/** The category is a Settings row someone can delete while unused -- same upsert as payroll's own. */
+const ensureInterestCategory = (tx: Prisma.TransactionClient) =>
+    tx.expenseCategoryLookup.upsert({
+        where: { code: LOAN_INTEREST },
+        update: {},
+        create: { code: LOAN_INTEREST, label: "Loan interest" },
+    });
 
 type LoanRow = Prisma.LoanGetPayload<{ include: { batch: { select: { batch_code: true } } } }>;
 
@@ -81,15 +103,15 @@ function withStanding(loan: LoanRow, paid: Prisma.Decimal, interest: Prisma.Deci
     };
 }
 
-async function standing(loans: LoanRow[]) {
+async function standing(loans: LoanRow[], db: Prisma.TransactionClient = prisma) {
     const ids = loans.map((l) => l.id);
     const [paid, interest] = await Promise.all([
-        prisma.payment.groupBy({
+        db.payment.groupBy({
             by: ["ref_id"],
             where: { ref_type: "LOAN", direction: "OUTGOING", ref_id: { in: ids } },
             _sum: { amount: true },
         }),
-        prisma.expense.groupBy({
+        db.expense.groupBy({
             by: ["loan_id"],
             where: { loan_id: { in: ids } },
             _sum: { amount: true },
@@ -124,15 +146,31 @@ export const LoanService = {
             standing([loan]),
             prisma.payment.findMany({
                 where: { ref_type: "LOAN", ref_id: id },
-                orderBy: { payment_date: "desc" },
+                orderBy: [{ payment_date: "desc" }, { created_at: "desc" }],
+                include: { loan_interest: { select: { amount: true } } },
             }),
             prisma.expense.findMany({ where: { loan_id: id }, orderBy: { date: "desc" } }),
         ]);
-        return { ...row!, payments, interest };
+        return {
+            ...row!,
+            interest,
+            payments: payments.map(({ loan_interest, ...p }) => ({
+                ...p,
+                interest: loan_interest?.amount.toFixed(2) ?? null,
+            })),
+        };
     },
 
     async create(data: CreateLoanInput) {
         const schedule = loanSchedule(data);
+        if (schedule.installment_amount.lessThan(0.01))
+            throw AppError.badRequest("That's too many installments for this amount", {
+                fields: { installment_count: "Too many installments for this amount" },
+            });
+        if (schedule.total_payable.greaterThan(MAX_AMOUNT))
+            throw AppError.badRequest("The total to repay is more than can be recorded", {
+                fields: { principal: "The total to repay is too large" },
+            });
         try {
             return await prisma.$transaction(async (tx) => {
                 if (data.batch_id !== undefined) await assertBatchOpen(tx, data.batch_id);
@@ -182,6 +220,7 @@ export const LoanService = {
                 }
                 const interest = schedule.total_payable.minus(data.principal);
                 if (data.purpose === "BATCH" && interest.greaterThan(0)) {
+                    await ensureInterestCategory(tx);
                     await writeExpense(tx, {
                         category: LOAN_INTEREST,
                         cost_type: "DIRECT",
@@ -204,12 +243,22 @@ export const LoanService = {
     async payInstallment(id: string, data: PayInstallmentInput) {
         try {
             return await prisma.$transaction(async (tx) => {
+                await lockLoan(tx, id);
                 const loan = await tx.loan.findUnique({ where: { id } });
                 if (!loan) throw AppError.notFound("Loan");
                 if (loan.purpose === "BATCH" && data.interest !== undefined)
                     throw AppError.badRequest(
                         "A batch loan's interest was booked on its batch when the loan was recorded",
                     );
+                if (data.payment_date < loan.received_on)
+                    throw AppError.badRequest(
+                        "An installment can't be paid before the loan's own date",
+                        {
+                            fields: { payment_date: "Before the loan's own date" },
+                        },
+                    );
+                // What's left before this payment, split into its two parts. Read under the lock.
+                const [row] = await standing([{ ...loan, batch: null }], tx);
                 const payment = await writePayment(tx, {
                     ref_type: "LOAN",
                     ref_id: id,
@@ -224,18 +273,41 @@ export const LoanService = {
                 });
                 if (loan.purpose === "BATCH") return { payment, interest: "0.00" };
 
-                // ponytail: default interest = the loan's interest share of every taka repaid -- exact for
-                // FLAT, close for EMI (which front-loads interest). The statement's figure overrides it.
-                const total = D(loan.total_payable);
+                // Interest can't pass what the loan has left, nor be so low the payment would repay more
+                // principal than is owed -- so a repaid loan has booked exactly its interest.
+                const amount = D(data.amount);
+                const interestLeft = D(row!.interest_total).minus(row!.interest_booked);
+                const principalLeft = D(row!.left).minus(interestLeft);
+                const least = Prisma.Decimal.max(amount.minus(principalLeft), 0);
+                const most = Prisma.Decimal.min(interestLeft, amount);
+                // ponytail: default = this payment's share of what's left -- exact for FLAT, close for EMI
+                // (which front-loads interest). The statement's figure overrides it.
                 const interest =
                     data.interest !== undefined
-                        ? money(D(data.interest))
-                        : money(D(data.amount).times(total.minus(loan.principal)).dividedBy(total));
+                        ? D(data.interest)
+                        : Prisma.Decimal.min(
+                              Prisma.Decimal.max(
+                                  money(amount.times(interestLeft).dividedBy(row!.left)),
+                                  least,
+                              ),
+                              most,
+                          );
+                if (interest.lessThan(least) || interest.greaterThan(most))
+                    throw AppError.badRequest(
+                        `Interest on this payment must be between ${least.toFixed(2)} and ${most.toFixed(2)}`,
+                        {
+                            fields: {
+                                interest: `Between ${least.toFixed(2)} and ${most.toFixed(2)}`,
+                            },
+                        },
+                    );
                 if (interest.greaterThan(0)) {
+                    await ensureInterestCategory(tx);
                     await writeExpense(tx, {
                         category: LOAN_INTEREST,
                         cost_type: "SHARED_PERIOD",
                         loan_id: id,
+                        loan_payment_id: payment.id,
                         amount: interest.toNumber(),
                         date: data.payment_date,
                         remarks: `Interest on loan from ${loan.lender}`,
@@ -252,6 +324,7 @@ export const LoanService = {
     /** A loan recorded by mistake, before any installment: removed with its receipt and booked interest. */
     async remove(id: string, actor_id: string) {
         return prisma.$transaction(async (tx) => {
+            await lockLoan(tx, id);
             const loan = await tx.loan.findUnique({ where: { id }, include: { expenses: true } });
             if (!loan) throw AppError.notFound("Loan");
             const installments = await tx.payment.count({

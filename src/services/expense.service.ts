@@ -134,6 +134,7 @@ export type ExpenseWrite = Omit<CreateExpenseInput, "cost_type"> & {
     cost_type: CreateExpenseInput["cost_type"] | "STOCK";
     purchase_id?: string;
     loan_id?: string;
+    loan_payment_id?: string;
 };
 
 /** Fail before any write: payroll expenses are paid by their payout; paid money names its account. */
@@ -165,6 +166,7 @@ export async function writeExpense(tx: Prisma.TransactionClient, data: ExpenseWr
             ...(data.batch_id !== undefined && { batch_id: data.batch_id }),
             ...(data.purchase_id !== undefined && { purchase_id: data.purchase_id }),
             ...(data.loan_id !== undefined && { loan_id: data.loan_id }),
+            ...(data.loan_payment_id !== undefined && { loan_payment_id: data.loan_payment_id }),
             ...(data.remarks !== undefined && { remarks: data.remarks }),
         },
     });

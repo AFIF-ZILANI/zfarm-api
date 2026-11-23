@@ -41,7 +41,11 @@ const isNoBill = (t: string) => (NO_BILL_REFS as readonly string[]).includes(t);
 
 export const createPaymentSchema = z
     .object({
-        amount: z.coerce.number().positive("Amount must be positive"),
+        // Payment.amount is numeric(10,2): less would be stored as 0, more wouldn't store at all.
+        amount: z.coerce
+            .number()
+            .min(0.01, "Amount must be positive")
+            .max(99_999_999.99, "That's more than one payment can hold"),
         payment_date: z.coerce.date(),
         ref_type: creatableRefType,
         // ref_id is a polymorphic reference (resolved via ref_type), not a real
