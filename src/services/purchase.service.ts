@@ -11,6 +11,12 @@ import { getItemLocationBalance } from "@lib/stock-balance";
 import { StockLedgerService } from "@services/stock-ledger.service";
 import { computeDiscount } from "@lib/discount";
 import { checkExpensePaid, writeExpense } from "@services/expense.service";
+import {
+    lockBills,
+    lockSupplier,
+    returnToAdvance,
+    useAdvance,
+} from "@services/supplier-payment.service";
 import type {
     AddPurchaseChargeInput,
     CreatePurchaseInput,
@@ -90,6 +96,15 @@ export const PurchaseService = {
         if (total_amount.minus(paid_amount).isNegative()) {
             throw AppError.badRequest("paid_amount cannot exceed the purchase total");
         }
+        const use_advance = new Prisma.Decimal(data.use_advance ?? 0);
+        if (use_advance.greaterThan(0)) {
+            if (data.supplier_id === undefined)
+                throw AppError.badRequest("An advance belongs to a supplier -- name one");
+            if (paid_amount.plus(use_advance).greaterThan(total_amount))
+                throw AppError.badRequest("Paid now and the advance used are more than the total", {
+                    fields: { use_advance: "More than the total" },
+                });
+        }
         requirePaidInstrument(
             paid_amount,
             data.paid_from_instrument_id,
@@ -106,6 +121,7 @@ export const PurchaseService = {
 
         try {
             return await prisma.$transaction(async (tx) => {
+                if (use_advance.greaterThan(0)) await lockSupplier(tx, data.supplier_id!);
                 const purchase = await tx.purchase.create({
                     data: {
                         purchase_date: data.purchase_date,
@@ -188,6 +204,13 @@ export const PurchaseService = {
                     note: data.payment_note,
                 });
 
+                if (use_advance.greaterThan(0))
+                    await useAdvance(tx, {
+                        supplier_id: data.supplier_id!,
+                        purchase_id: purchase.id,
+                        amount: use_advance,
+                    });
+
                 // Same transaction as the purchase: its charges can't go missing the way a separate
                 // "related expense" call could.
                 for (const charge of data.charges ?? []) {
@@ -253,6 +276,13 @@ export const PurchaseService = {
      *  units, or warehouse stock already used or moved (removing it would drive the balance negative). */
     async remove(id: string, actor_id: string) {
         return prisma.$transaction(async (tx) => {
+            // The supplier first, then the bill: the order every supplier payment locks in.
+            const owner = await tx.purchase.findUnique({
+                where: { id },
+                select: { supplier_id: true },
+            });
+            if (owner?.supplier_id) await lockSupplier(tx, owner.supplier_id);
+            await lockBills(tx, [id]);
             const purchase = await tx.purchase.findUnique({
                 where: { id },
                 include: {
@@ -299,6 +329,10 @@ export const PurchaseService = {
                 }
             }
 
+            // Handed over in a supplier payment: that money is still with the supplier.
+            const returned_to_advance = purchase.supplier_id
+                ? await returnToAdvance(tx, { supplier_id: purchase.supplier_id, purchase_id: id })
+                : [];
             const chargeIds = purchase.charges.map((c) => c.id);
             const payments = await tx.payment.findMany({
                 where: {
@@ -316,7 +350,14 @@ export const PurchaseService = {
                 actor_id,
                 note: "Purchase removed (entered by mistake)",
                 // Round-trip through JSON so Decimals and Dates land as plain strings.
-                before: JSON.parse(JSON.stringify({ ...purchase, payments, stock_ledger: ledger })),
+                before: JSON.parse(
+                    JSON.stringify({
+                        ...purchase,
+                        payments,
+                        returned_to_advance,
+                        stock_ledger: ledger,
+                    }),
+                ),
             });
 
             await tx.payment.deleteMany({ where: { id: { in: payments.map((p) => p.id) } } });

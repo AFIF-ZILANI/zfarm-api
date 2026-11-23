@@ -3,7 +3,7 @@ import { Prisma } from "../../prisma/generated/prisma/client";
 import { getItemAvgCosts } from "@lib/stock-value";
 import { chargeRatios, landedTotal } from "@lib/purchase-charges";
 import { isNonDepleting } from "@lib/coded-stock";
-import { PAYROLL_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
+import { NEVER_OWED_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
 
 /**
  * The farm's money, for the Finance overview. Profit counts what was *used*, not what was bought, the same
@@ -131,47 +131,100 @@ async function costsIn(
     return [...lines.values()].sort((a, b) => b.amount - a.amount);
 }
 
+/** Money paid to suppliers before `at`, split by what it was *then*: settling a bill or old balance that
+ * already existed, or an advance. Using an advance re-points its earlier payment at the later bill, so what
+ * the row points at today isn't enough -- the bill's own date decides. */
+async function supplierMoneyAt(at: Date) {
+    // Stored timestamps have no zone (UTC): compare without one, whatever the session's zone is.
+    const before = at.toISOString().replace("Z", "");
+    const [row] = await prisma.$queryRaw<{ settled: Prisma.Decimal; advances: Prisma.Decimal }[]>`
+        SELECT
+            COALESCE(SUM(p.amount) FILTER (
+                WHERE b.purchase_date < ${before}::timestamp OR s.opening_date < ${before}::timestamp
+            ), 0) AS settled,
+            COALESCE(SUM(CASE WHEN p.direction = 'INCOMING' THEN -p.amount ELSE p.amount END) FILTER (
+                WHERE p.ref_type = 'SUPPLIER_ADVANCE'
+                   OR b.purchase_date >= ${before}::timestamp
+                   OR s.opening_date >= ${before}::timestamp
+            ), 0) AS advances
+        FROM "Payment" p
+        LEFT JOIN "Purchase" b ON p.ref_type = 'PURCHASE' AND b.id = p.ref_id
+        LEFT JOIN "Suppliers" s ON p.ref_type = 'SUPPLIER_OPENING' AND s.id = p.ref_id
+        WHERE p.ref_type IN ('PURCHASE', 'SUPPLIER_OPENING', 'SUPPLIER_ADVANCE')
+          AND p.payment_date < ${before}::timestamp`;
+    return row!;
+}
+
 /** Balances at an instant: everything dated before `at`. */
 async function balancesAt(at: Date) {
     const before = { lt: at };
-    const [moneyIn, moneyOut, sales, birdSales, purchases, expenses, salesPaid, purchasesPaid] =
-        await Promise.all([
-            prisma.payment.aggregate({
-                where: { direction: "INCOMING", payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { direction: "OUTGOING", payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.sale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
-            prisma.birdSale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
-            prisma.purchase.aggregate({
-                where: { purchase_date: before },
-                _sum: { due_amount: true },
-            }),
-            // Payroll's own expenses are settled by their payout, never owed as an expense.
-            prisma.expense.aggregate({
-                where: { date: before, category: { notIn: PAYROLL_EXPENSE_CATEGORIES } },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { ref_type: { in: ["SALE", "BIRD_SALE"] }, payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { ref_type: { in: ["PURCHASE", "EXPENSE"] }, payment_date: before },
-                _sum: { amount: true },
-            }),
-        ]);
+    const [
+        moneyIn,
+        moneyOut,
+        sales,
+        birdSales,
+        purchases,
+        expenses,
+        salesPaid,
+        expensesPaid,
+        openings,
+        supplierMoney,
+        loansTaken,
+        loansRepaid,
+    ] = await Promise.all([
+        prisma.payment.aggregate({
+            where: { direction: "INCOMING", payment_date: before, ref_type: { not: "TRANSFER" } },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { direction: "OUTGOING", payment_date: before, ref_type: { not: "TRANSFER" } },
+            _sum: { amount: true },
+        }),
+        prisma.sale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
+        prisma.birdSale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
+        prisma.purchase.aggregate({
+            where: { purchase_date: before },
+            _sum: { due_amount: true },
+        }),
+        // Payroll's own expenses are settled by their payout, never owed as an expense.
+        prisma.expense.aggregate({
+            where: { date: before, category: { notIn: NEVER_OWED_EXPENSE_CATEGORIES } },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { ref_type: { in: ["SALE", "BIRD_SALE"] }, payment_date: before },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { ref_type: "EXPENSE", payment_date: before },
+            _sum: { amount: true },
+        }),
+        // Owed to suppliers from before FMS.
+        prisma.suppliers.aggregate({
+            where: { opening_date: before },
+            _sum: { opening_due: true },
+        }),
+        supplierMoneyAt(at),
+        // A loan owes its total (principal + interest); installments are its OUTGOING payments.
+        prisma.loan.aggregate({ where: { received_on: before }, _sum: { total_payable: true } }),
+        prisma.payment.aggregate({
+            where: { ref_type: "LOAN", direction: "OUTGOING", payment_date: before },
+            _sum: { amount: true },
+        }),
+    ]);
     return {
         cash: D(moneyIn._sum.amount).minus(D(moneyOut._sum.amount)),
         receivables: D(sales._sum.due_amount)
             .plus(D(birdSales._sum.due_amount))
             .minus(D(salesPaid._sum.amount)),
         payables: D(purchases._sum.due_amount)
+            .plus(D(openings._sum.opening_due))
             .plus(D(expenses._sum.amount))
-            .minus(D(purchasesPaid._sum.amount)),
+            .minus(D(expensesPaid._sum.amount))
+            .minus(D(supplierMoney.settled)),
+        // Never netted off payables: money with one supplier doesn't pay another.
+        supplier_advances: D(supplierMoney.advances),
+        loans_owed: D(loansTaken._sum.total_payable).minus(D(loansRepaid._sum.amount)),
     };
 }
 
@@ -194,6 +247,8 @@ async function periodFigures(range: Range) {
         cash: n(end.cash),
         receivables: n(end.receivables),
         payables: n(end.payables),
+        loans_owed: n(end.loans_owed),
+        supplier_advances: n(end.supplier_advances),
         cost_breakdown: costLines,
     };
 }
@@ -236,7 +291,11 @@ export const FinanceService = {
                     costsIn(r, labels),
                     prisma.payment.groupBy({
                         by: ["direction"],
-                        where: { payment_date: { gte: r.from, lt: r.to } },
+                        // A transfer between the farm's own accounts is neither money in nor out.
+                        where: {
+                            payment_date: { gte: r.from, lt: r.to },
+                            ref_type: { not: "TRANSFER" },
+                        },
                         _sum: { amount: true },
                     }),
                     balancesAt(r.to),
@@ -272,19 +331,25 @@ export const FinanceService = {
                     select: { id: true, supplier_id: true, purchase_date: true, due_amount: true },
                 }),
                 prisma.expense.findMany({
-                    where: { category: { notIn: PAYROLL_EXPENSE_CATEGORIES } },
+                    where: { category: { notIn: NEVER_OWED_EXPENSE_CATEGORIES } },
                     select: { id: true, category: true, date: true, amount: true },
                 }),
-                prisma.payment.groupBy({ by: ["ref_id"], _sum: { amount: true } }),
+                // By kind as well as id: an old balance and an advance both carry the supplier's id.
+                prisma.payment.groupBy({ by: ["ref_type", "ref_id"], _sum: { amount: true } }),
                 prisma.customers.findMany({
                     select: { id: true, profile: { select: { name: true } } },
                 }),
                 prisma.suppliers.findMany({
-                    select: { id: true, profile: { select: { name: true } } },
+                    select: {
+                        id: true,
+                        opening_due: true,
+                        opening_date: true,
+                        profile: { select: { name: true } },
+                    },
                 }),
                 prisma.expenseCategoryLookup.findMany({ select: { code: true, label: true } }),
             ]);
-        const paidBy = new Map(paid.map((p) => [p.ref_id, D(p._sum.amount)]));
+        const paidBy = new Map(paid.map((p) => [`${p.ref_type}:${p.ref_id}`, D(p._sum.amount)]));
         const customerName = new Map(customers.map((c) => [c.id, c.profile.name]));
         const supplierName = new Map(suppliers.map((s) => [s.id, s.profile.name]));
         const expenseName = new Map(expenseLabels.map((e) => [e.code, e.label]));
@@ -324,19 +389,20 @@ export const FinanceService = {
             };
         };
 
-        const left = (id: string, due: Prisma.Decimal) => due.minus(paidBy.get(id) ?? 0);
+        const left = (ref_type: string, id: string, due: Prisma.Decimal) =>
+            due.minus(paidBy.get(`${ref_type}:${id}`) ?? 0);
         return {
             receivables: tally(
                 [
-                    ...sales.map((s) => ({ ...s, date: s.sale_date })),
-                    ...birdSales.map((s) => ({ ...s, date: s.sale_date })),
+                    ...sales.map((s) => ({ ...s, ref: "SALE", date: s.sale_date })),
+                    ...birdSales.map((s) => ({ ...s, ref: "BIRD_SALE", date: s.sale_date })),
                 ].map((s) => ({
                     key: s.customer_id ?? "walk-in",
                     name: s.customer_id
                         ? (customerName.get(s.customer_id) ?? "Unknown customer")
                         : "Walk-in buyers",
                     date: s.date,
-                    due: left(s.id, s.due_amount),
+                    due: left(s.ref, s.id, s.due_amount),
                 })),
             ),
             payables: tally([
@@ -346,13 +412,21 @@ export const FinanceService = {
                         ? (supplierName.get(p.supplier_id) ?? "Unknown supplier")
                         : "No supplier named",
                     date: p.purchase_date,
-                    due: left(p.id, p.due_amount),
+                    due: left("PURCHASE", p.id, p.due_amount),
                 })),
+                ...suppliers
+                    .filter((s) => s.opening_due.greaterThan(0))
+                    .map((s) => ({
+                        key: s.id,
+                        name: s.profile.name,
+                        date: s.opening_date!,
+                        due: left("SUPPLIER_OPENING", s.id, s.opening_due),
+                    })),
                 ...expenses.map((e) => ({
                     key: `expense:${e.category}`,
                     name: `${expenseName.get(e.category) ?? e.category} (expense)`,
                     date: e.date,
-                    due: left(e.id, e.amount),
+                    due: left("EXPENSE", e.id, e.amount),
                 })),
             ]),
         };

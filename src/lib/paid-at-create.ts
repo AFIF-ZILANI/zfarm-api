@@ -7,6 +7,13 @@ type Ref = "SALE" | "BIRD_SALE" | "PURCHASE" | "EXPENSE";
  * payment, and never counted as an expense still owed. */
 export const PAYROLL_EXPENSE_CATEGORIES = ["SALARY", "FESTIVAL_BONUS", "SALARY_TRANSFER_FEE"];
 
+/** Loan interest is written by LoanService and settled by the loan's own installment payment. */
+export const LOAN_INTEREST = "LOAN_INTEREST";
+
+/** Expenses settled by some other payment (a payout, a loan installment): never paid as an expense,
+ * never counted as still owed. */
+export const NEVER_OWED_EXPENSE_CATEGORIES = [...PAYROLL_EXPENSE_CATEGORIES, LOAN_INTEREST];
+
 /**
  * A sale or purchase can be recorded with money already paid. That cash has to land somewhere the books
  * can see, so it is written as a Payment against an instrument -- exactly like a payment made later --

@@ -388,6 +388,14 @@ empty `PATCH` body.
 | PATCH | `/api/suppliers/:id` | 200 | any subset of create fields |
 | POST | `/api/suppliers/:id/deactivate` | 200 | — |
 | POST | `/api/suppliers/:id/reactivate` | 200 | — |
+| GET | `/api/suppliers/balances` | 200 | every supplier: `opening_left`, `bills_due`, `owed` (both together), `advance` they hold |
+| GET | `/api/suppliers/:id/statement` | 200 | query: `from?`, `to?` (`YYYY-MM-DD`, both included) → `{ brought_forward, lines, closing, bought, paid }`; positive = the farm owes, negative = they hold an advance |
+| GET | `/api/suppliers/:id/dues` | 200 | `{ opening_left, advance, bills }`, bills with something due, oldest first |
+| POST | `/api/suppliers/:id/payments` | 201 | `{ amount, payment_date, from_instrument_id, transaction_ref?, note?, split?: { opening?, bills: [{ purchase_id, amount }] } }` — no `split`: old balance, then oldest bills; what's left is an advance |
+| POST | `/api/suppliers/:id/payments/:paymentId/remove` | 200 | `{ reason }` — a payment or refund entered by mistake; audited. 409 if the supplier already gave some back |
+| POST | `/api/suppliers/:id/use-advance` | 200 | `{ split? }` as above — settles dues already there from the advance held; no cash moves → `{ used, advance }` |
+| POST | `/api/suppliers/:id/refunds` | 201 | `{ amount, payment_date, to_instrument_id, transaction_ref?, note? }` — up to the advance held |
+| PATCH | `/api/suppliers/:id/opening` | 200 | `{ opening_due, opening_date, opening_note? }` — owed from before FMS; 409 below what's paid on it |
 
 `role` here is `SupplierRoleNames` (their role at the supplying company —
 sales rep, distributor, etc.), unrelated to `EmployeeRoleNames`. `supplies`
@@ -822,7 +830,7 @@ never update. The one way back is removing a purchase entered by mistake (`DELET
 **Create body**:
 ```
 {
-  supplier_id?, invoice_no?, purchase_date, paid_amount? (default 0), paid_from_instrument_id?,
+  supplier_id, use_advance? (of the advance they hold), invoice_no?, purchase_date, paid_amount? (default 0), paid_from_instrument_id?,
   payment_date?, payment_transaction_ref?, payment_note?, recorded_by_id,
   items: [{ item_id, batch_id?, quantity, unit, unit_price, mfg_date?, expiration_date? }, ...] (min 1),
   charges?: [{ category, amount, remarks?, paid_amount?, paid_from_instrument_id? }, ...] (max 10)
@@ -1438,7 +1446,11 @@ Append-only (§1.10).
 | GET | `/api/payments` | 200 | query: `ref_type?`, `ref_id?`, `direction?`, `instrument_id?` (matches either from/to) |
 | GET | `/api/payments/total-paid` | 200 | query (**required**): `ref_type`, `ref_id` → `{ ref_type, ref_id, total_paid }` |
 | GET | `/api/payments/:id` | 200 | — |
-| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE, ref_id, to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee expenses are refused: they are paid through their payroll payout |
+| POST | `/api/payments` | 201 | `{ amount, payment_date, ref_type: SALE\|BIRD_SALE\|PURCHASE\|EXPENSE (with `ref_id`) or OWNER_CAPITAL\|OWNER_DRAW\|OTHER_IN\|OTHER_OUT\|TRANSFER (no `ref_id`; OTHER_* need `note`; TRANSFER names both accounts), to_instrument_id \| from_instrument_id, transaction_ref?, note? }` — `direction` is derived from `ref_type` (sales in, purchases and expenses out), and wage/fee and loan-interest expenses are refused: they are paid through their payroll payout or loan |
+| GET | `/api/loans`, `/api/loans/:id` | 200 | loan + `paid`, `left`, `interest_total`, `interest_booked`, `next_due_on`; one loan also lists `payments` (each installment with its `interest`) |
+| POST | `/api/loans` | 201 | `{ lender, purpose: BATCH\|FARM\|LOSS\|OLD_DEBT, batch_id?, principal, terms: EMI\|FLAT\|NONE, annual_rate?, total_payable?, installment_count, frequency: MONTHLY\|WEEKLY\|ONE_OFF, first_due_on, received_on, to_instrument_id?, note? }` |
+| POST | `/api/loans/:id/installments` | 201 | `{ amount, payment_date, from_instrument_id, interest?, transaction_ref?, note? }` — `interest` can't pass what the loan has left, nor leave a repaid loan short of its interest |
+| DELETE | `/api/loans/:id` | 200 | a loan entered by mistake; 409 once an installment is paid |
 
 **Exactly one farm account, on the side the money moved**: money received
 (SALE, BIRD_SALE) names only `to_instrument_id` — where it landed; money paid
