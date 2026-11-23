@@ -690,6 +690,10 @@ Same 5-route shape, swap the base path:
 | Expense categories (`Expense.category`) | `/api/expense-categories` |
 | Supplier supply categories (`Suppliers` supplies) | `/api/supplier-supply-categories` |
 
+`POST /api/units` also takes `base_unit?` (`LITER`, `KG`, `UNIT`, `DOSE`, `PCS`, `METER`): a custom
+package unit for items of that base unit (`{ "label": "Small Bag", "base_unit": "KG" }`). Its size is set
+per item through `/api/item-units`. **409** if the name is taken or belongs to a deactivated unit.
+
 A deactivated row (`is_active: false`) still satisfies existing FK
 references (nothing referencing it breaks), but should be filtered out of
 any client-side "pick a category" dropdown — that's what `?active=true`

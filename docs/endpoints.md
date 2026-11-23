@@ -591,7 +591,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/units` | Admin | 200 | query: `page`, `limit`, `active` | List |
-| POST | `/api/units` | Admin | 201 | body: `label` | Create |
+| POST | `/api/units` | Admin | 201 | body: `label`, `base_unit?` | Created |
 | PATCH | `/api/units/:id` | Admin | 200 | body: `label` | Update |
 | POST | `/api/units/:id/deactivate` | Admin | 200 | — | Deactivate |
 | POST | `/api/units/:id/reactivate` | Admin | 200 | — | Reactivate |
