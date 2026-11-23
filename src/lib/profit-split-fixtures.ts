@@ -72,3 +72,9 @@ export async function closedBatch(tx: Tx, day: number, over: Record<string, unkn
         })
     ).id;
 }
+export async function makeSupplierIn(tx: Tx, over: Record<string, unknown> = {}) {
+    const p = await tx.profiles.create({
+        data: { name: "Split Supplier", mobile: mobile(), role: "SUPPLIER" },
+    });
+    return (await tx.suppliers.create({ data: { profile_id: p.id, role: "DEALER", ...over } })).id;
+}
