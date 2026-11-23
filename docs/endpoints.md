@@ -1,6 +1,6 @@
 # Endpoint index
 
-Every route the API serves (330 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
+Every route the API serves (331 in all), generated from the source by `bun run docs:endpoints`. Do not edit by hand: change the code and regenerate.
 
 For what the fields mean, the error cases and worked examples, see [`api.md`](api.md). For conventions (envelope, pagination, errors, idempotency) see its section 1.
 
@@ -145,6 +145,7 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | GET | `/api/suppliers/:id/statement` | Admin | 200 | query: `from`, `to` | Supplier statement fetched |
 | POST | `/api/suppliers/:id/payments` | Admin | 201 | body: `amount`, `payment_date`, `transaction_ref?`, `note?`, `from_instrument_id`, `split?` | Supplier paid |
 | POST | `/api/suppliers/:id/payments/:paymentId/remove` | Admin | 200 | body: `reason` | Supplier payment removed |
+| POST | `/api/suppliers/:id/use-advance` | Admin | 200 | body: any of `split` | Advance used |
 | POST | `/api/suppliers/:id/refunds` | Admin | 201 | body: `amount`, `payment_date`, `transaction_ref?`, `note?`, `to_instrument_id` | Refund recorded |
 | PATCH | `/api/suppliers/:id/opening` | Admin | 200 | body: `opening_due`, `opening_date`, `opening_note?` | Old balance saved |
 

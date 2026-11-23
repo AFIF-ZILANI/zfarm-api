@@ -393,6 +393,7 @@ empty `PATCH` body.
 | GET | `/api/suppliers/:id/dues` | 200 | `{ opening_left, advance, bills }`, bills with something due, oldest first |
 | POST | `/api/suppliers/:id/payments` | 201 | `{ amount, payment_date, from_instrument_id, transaction_ref?, note?, split?: { opening?, bills: [{ purchase_id, amount }] } }` — no `split`: old balance, then oldest bills; what's left is an advance |
 | POST | `/api/suppliers/:id/payments/:paymentId/remove` | 200 | `{ reason }` — a payment or refund entered by mistake; audited. 409 if the supplier already gave some back |
+| POST | `/api/suppliers/:id/use-advance` | 200 | `{ split? }` as above — settles dues already there from the advance held; no cash moves → `{ used, advance }` |
 | POST | `/api/suppliers/:id/refunds` | 201 | `{ amount, payment_date, to_instrument_id, transaction_ref?, note? }` — up to the advance held |
 | PATCH | `/api/suppliers/:id/opening` | 200 | `{ opening_due, opening_date, opening_note? }` — owed from before FMS; 409 below what's paid on it |
 
