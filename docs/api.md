@@ -466,7 +466,7 @@ empty `PATCH` body).
 |---|---|---|---|
 | GET | `/api/items` | 200 | query: `category?`, `is_active?` |
 | GET | `/api/items/:id` | 200 | — (also returns `itemOrganizations` links) |
-| POST | `/api/items` | 201 | `{ name, category, unit, reorder_level?, preferred_reorder_qty?, lead_time_days?, supplier_ids?: uuid[] }` |
+| POST | `/api/items` | 201 | `{ name, category, unit, reorder_level?, preferred_reorder_qty?, lead_time_days?, supplier_ids?: uuid[], units? }` -- `units`: the item's full list of conversions, `[{ unit: code \| label: custom name, factor_to_base (0.0001-1,000,000), is_purchasable?, is_usable? }]`, saved with the item in one transaction; a new `label` becomes a unit of this base |
 | PATCH | `/api/items/:id` | 200 | any subset of create fields |
 | POST | `/api/items/:id/deactivate` | 200 | — |
 | POST | `/api/items/:id/reactivate` | 200 | — |
@@ -689,6 +689,14 @@ Same 5-route shape, swap the base path:
 | Units (`Item.unit`, `PurchaseItem.unit`, `SaleItem.unit`) | `/api/units` |
 | Expense categories (`Expense.category`) | `/api/expense-categories` |
 | Supplier supply categories (`Suppliers` supplies) | `/api/supplier-supply-categories` |
+
+`POST /api/units` also takes `base_unit?` (`LITER`, `KG`, `UNIT`, `DOSE`, `PCS`, `METER`): a custom
+package unit for items of that base unit (`{ "label": "Small Bag", "base_unit": "KG" }`). Its size is set
+per item (`units` on `/api/items`, or `/api/item-units`). Unit names are up to 40 characters in any script
+and keep decimals (`"Bag 12.5kg"` → `BAG_12.5KG`); **409** if another unit has the name or it belongs to a
+deactivated unit, on create and on rename. Show `label`, not `code`: a renamed unit keeps its code, and a
+name freed by a rename gets a numbered code (`SMALL_BAG_2`). `itemUnits` on items, ledger and consumption
+rows carry `unitRef.label`. Every lookup list takes `limit` up to 1000.
 
 A deactivated row (`is_active: false`) still satisfies existing FK
 references (nothing referencing it breaks), but should be filtered out of

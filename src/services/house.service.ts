@@ -168,6 +168,7 @@ export const HouseService = {
                 item_name: string;
                 item_unit: string;
                 pack_unit: string | null;
+                pack_label: string | null;
                 units: number;
                 in_use: number;
                 unsized: number;
@@ -178,6 +179,7 @@ export const HouseService = {
                    i.name AS item_name,
                    i.unit AS item_unit,
                    CASE WHEN COUNT(DISTINCT pi.unit) = 1 THEN MIN(pi.unit) END AS pack_unit,
+                   CASE WHEN COUNT(DISTINCT pi.unit) = 1 THEN MIN(u.label) END AS pack_label,
                    COUNT(*)::int AS units,
                    COUNT(*) FILTER (WHERE su.status = 'IN_USE')::int AS in_use,
                    COUNT(*) FILTER (WHERE pi.unit_count IS NULL)::int AS unsized,
@@ -191,6 +193,7 @@ export const HouseService = {
             ) cur ON TRUE
             JOIN "PurchaseItem" pi ON pi.id = su.purchase_item_id
             JOIN "Item" i ON i.id = pi.item_id
+            JOIN "Unit" u ON u.code = pi.unit
             WHERE cur.house_id = ${id}
               AND su.status::text = ANY(${includeInUse ? ["BOUND", "IN_USE"] : ["BOUND"]})
             GROUP BY pi.item_id, i.name, i.unit
@@ -203,6 +206,8 @@ export const HouseService = {
             unit: r.item_unit,
             /** What one coded unit is (BOTTLE), when every unit of this item here is the same. */
             pack_unit: r.pack_unit,
+            /** Its current name: a custom or renamed unit's code doesn't say it. */
+            pack_label: r.pack_label,
             units: r.units,
             /** Of `units`, how many are already opened (only non-zero with includeInUse). */
             in_use: r.in_use,

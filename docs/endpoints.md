@@ -187,8 +187,8 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | GET | `/api/items/low-stock` | Worker, Manager, Admin | 200 | — | Get low stock |
 | GET | `/api/items/stock-by-location` | Worker, Manager, Admin | 200 | — | Get stock by location |
 | GET | `/api/items/:id` | Worker, Manager, Admin | 200 | — | Get one |
-| POST | `/api/items` | Admin | 201 | body: `name`, `category`, `unit`, `reorder_level?`, `preferred_reorder_qty?`, `lead_time_days?`, `supplier_ids?`, `meta_data?`, `is_unit_tracked?`, `is_farm_made?` | Create |
-| PATCH | `/api/items/:id` | Admin | 200 | body: any of `name`, `category`, `reorder_level`, `preferred_reorder_qty`, `lead_time_days`, `supplier_ids`, `meta_data`, `is_unit_tracked`, `is_farm_made` | Update |
+| POST | `/api/items` | Admin | 201 | body: `name`, `category`, `unit`, `reorder_level?`, `preferred_reorder_qty?`, `lead_time_days?`, `supplier_ids?`, `meta_data?`, `is_unit_tracked?`, `is_farm_made?`, `units?` | Create |
+| PATCH | `/api/items/:id` | Admin | 200 | body: any of `name`, `category`, `reorder_level`, `preferred_reorder_qty`, `lead_time_days`, `supplier_ids`, `meta_data`, `is_unit_tracked`, `is_farm_made`, `units` | Update |
 | DELETE | `/api/items/:id` | Admin | 200 | — | Delete |
 | POST | `/api/items/:id/deactivate` | Admin | 200 | — | Deactivate |
 | POST | `/api/items/:id/reactivate` | Admin | 200 | — | Reactivate |
@@ -601,8 +601,8 @@ For what the fields mean, the error cases and worked examples, see [`api.md`](ap
 | Method | Path | Access | Status | Input | What it does |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/units` | Admin | 200 | query: `page`, `limit`, `active` | List |
-| POST | `/api/units` | Admin | 201 | body: `label` | Create |
-| PATCH | `/api/units/:id` | Admin | 200 | body: `label` | Update |
+| POST | `/api/units` | Admin | 201 | body: `label`, `base_unit?` | Created |
+| PATCH | `/api/units/:id` | Admin | 200 | body: `label` | Updated |
 | POST | `/api/units/:id/deactivate` | Admin | 200 | — | Deactivate |
 | POST | `/api/units/:id/reactivate` | Admin | 200 | — | Reactivate |
 | DELETE | `/api/units/:id` | Admin | 200 | — | Delete |

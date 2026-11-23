@@ -21,6 +21,7 @@ export async function stockUnitProfile(id: string, { showCost }: { showCost: boo
             purchase_item: {
                 include: {
                     item: { select: { id: true, name: true, category: true, unit: true } },
+                    unitRef: { select: { label: true } },
                     purchase: {
                         include: {
                             supplier: {
@@ -96,6 +97,7 @@ export async function stockUnitProfile(id: string, { showCost }: { showCost: boo
             id: lot.id,
             quantity: lot.quantity.toString(),
             unit: lot.unit,
+            unit_label: lot.unitRef.label,
             base_quantity: lot.base_quantity.toString(),
             unit_count: lot.unit_count,
             unit_price: showCost ? lot.unit_price.toString() : null,
