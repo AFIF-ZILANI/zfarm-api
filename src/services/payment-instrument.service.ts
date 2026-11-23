@@ -8,6 +8,19 @@ import type {
     ListPaymentInstrumentsQuery,
 } from "@validators/payment-instrument.validator";
 
+/** The reinvestment and reserve money each sit in one active account (index PaymentInstrument_one_active_fund). */
+async function oneActivePerFund<T>(write: () => Promise<T>): Promise<T> {
+    try {
+        return await write();
+    } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")
+            throw AppError.conflict("There is already an active account for that fund", {
+                fields: { fund: "Already has an active account" },
+            });
+        throw e;
+    }
+}
+
 export const PaymentInstrumentService = {
     async getAll(query: ListPaymentInstrumentsQuery) {
         const where = {
@@ -31,16 +44,19 @@ export const PaymentInstrumentService = {
     },
 
     async create(data: CreatePaymentInstrumentInput) {
-        return prisma.paymentInstrument.create({
-            data: {
-                type: data.type,
-                label: data.label,
-                ...(data.bank_name !== undefined && { bank_name: data.bank_name }),
-                ...(data.account_no !== undefined && { account_no: data.account_no }),
-                ...(data.mobile_no !== undefined && { mobile_no: data.mobile_no }),
-                ...(data.mfs_type !== undefined && { mfs_type: data.mfs_type }),
-            },
-        });
+        return oneActivePerFund(() =>
+            prisma.paymentInstrument.create({
+                data: {
+                    type: data.type,
+                    label: data.label,
+                    ...(data.bank_name !== undefined && { bank_name: data.bank_name }),
+                    ...(data.account_no !== undefined && { account_no: data.account_no }),
+                    ...(data.mobile_no !== undefined && { mobile_no: data.mobile_no }),
+                    ...(data.mfs_type !== undefined && { mfs_type: data.mfs_type }),
+                    ...(data.fund !== undefined && { fund: data.fund }),
+                },
+            }),
+        );
     },
 
     async update(id: string, data: UpdatePaymentInstrumentInput) {
@@ -50,8 +66,8 @@ export const PaymentInstrumentService = {
         });
         if (!instrument) throw AppError.notFound("PaymentInstrument");
 
-        const { type, label, bank_name, account_no, mobile_no, mfs_type } = data;
-        if (!type && !label && !bank_name && !account_no && !mobile_no && !mfs_type) {
+        const { type, label, bank_name, account_no, mobile_no, mfs_type, fund } = data;
+        if (!type && !label && !bank_name && !account_no && !mobile_no && !mfs_type && !fund) {
             throw AppError.badRequest("No update fields provided");
         }
 
@@ -60,7 +76,9 @@ export const PaymentInstrumentService = {
         // because the web's edit form re-sends both fields on every save.
         const changesIdentity =
             (account_no !== undefined && account_no !== instrument.account_no) ||
-            (mobile_no !== undefined && mobile_no !== instrument.mobile_no);
+            (mobile_no !== undefined && mobile_no !== instrument.mobile_no) ||
+            // Past cash, loan principal and losses were worked out with this account in its fund.
+            (fund !== undefined && fund !== instrument.fund);
         if (
             changesIdentity &&
             instrument._count.payments_from + instrument._count.payments_to > 0
@@ -70,17 +88,20 @@ export const PaymentInstrumentService = {
             );
         }
 
-        return prisma.paymentInstrument.update({
-            where: { id },
-            data: {
-                ...(type && { type }),
-                ...(label && { label }),
-                ...(bank_name !== undefined && { bank_name }),
-                ...(account_no !== undefined && { account_no }),
-                ...(mobile_no !== undefined && { mobile_no }),
-                ...(mfs_type !== undefined && { mfs_type }),
-            },
-        });
+        return oneActivePerFund(() =>
+            prisma.paymentInstrument.update({
+                where: { id },
+                data: {
+                    ...(type && { type }),
+                    ...(label && { label }),
+                    ...(bank_name !== undefined && { bank_name }),
+                    ...(account_no !== undefined && { account_no }),
+                    ...(mobile_no !== undefined && { mobile_no }),
+                    ...(mfs_type !== undefined && { mfs_type }),
+                    ...(fund !== undefined && { fund }),
+                },
+            }),
+        );
     },
 
     /**
@@ -109,7 +130,9 @@ export const PaymentInstrumentService = {
     async setActive(id: string, is_active: boolean) {
         const instrument = await prisma.paymentInstrument.findUnique({ where: { id } });
         if (!instrument) throw AppError.notFound("PaymentInstrument");
-        return prisma.paymentInstrument.update({ where: { id }, data: { is_active } });
+        return oneActivePerFund(() =>
+            prisma.paymentInstrument.update({ where: { id }, data: { is_active } }),
+        );
     },
 
     /** incoming (payments_to) minus outgoing (payments_from), all-time. */

@@ -12,6 +12,7 @@ export const createPaymentInstrumentSchema = z.object({
     account_no: z.string().optional(),
     mobile_no: z.string().optional(),
     mfs_type: mfsType.optional(),
+    fund: z.enum(["OPERATING", "REINVEST", "RESERVE"]).optional(),
 });
 
 export const updatePaymentInstrumentSchema = createPaymentInstrumentSchema.partial();
