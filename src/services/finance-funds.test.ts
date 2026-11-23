@@ -81,6 +81,27 @@ describe("cash by fund", () => {
         expect(diff(after, before)).toEqual([909.5, 1000, 0, -90.5]);
         expect(Number((after[1]! + after[2]! + after[3]!).toFixed(2))).toBe(after[0]!);
     });
+    test("every account of a fund counts", async () => {
+        const second = (
+            await prisma.paymentInstrument.create({
+                data: { type: "CASH", label: "Funds OPERATING 2" },
+            })
+        ).id;
+        made.push(second);
+        const before = await read(at(1, 11));
+        for (const [to, amount] of [
+            [op, 10],
+            [second, 7],
+        ] as const)
+            await pay({
+                ref_type: "OWNER_CAPITAL",
+                direction: "INCOMING",
+                amount,
+                payment_date: at(5, 10),
+                to_instrument_id: to,
+            });
+        expect(diff(await read(at(1, 11)), before)).toEqual([17, 17, 0, 0]);
+    });
     test("the dashboard names each account's fund", async () => {
         const row = (await AnalyticsService.financialDashboard({})).cash_by_instrument.find(
             (r) => r.instrument_id === op,
