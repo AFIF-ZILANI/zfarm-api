@@ -3,7 +3,7 @@ import { Prisma } from "../../prisma/generated/prisma/client";
 import { getItemAvgCosts } from "@lib/stock-value";
 import { chargeRatios, landedTotal } from "@lib/purchase-charges";
 import { isNonDepleting } from "@lib/coded-stock";
-import { PAYROLL_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
+import { NEVER_OWED_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
 
 /**
  * The farm's money, for the Finance overview. Profit counts what was *used*, not what was bought, the same
@@ -134,36 +134,52 @@ async function costsIn(
 /** Balances at an instant: everything dated before `at`. */
 async function balancesAt(at: Date) {
     const before = { lt: at };
-    const [moneyIn, moneyOut, sales, birdSales, purchases, expenses, salesPaid, purchasesPaid] =
-        await Promise.all([
-            prisma.payment.aggregate({
-                where: { direction: "INCOMING", payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { direction: "OUTGOING", payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.sale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
-            prisma.birdSale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
-            prisma.purchase.aggregate({
-                where: { purchase_date: before },
-                _sum: { due_amount: true },
-            }),
-            // Payroll's own expenses are settled by their payout, never owed as an expense.
-            prisma.expense.aggregate({
-                where: { date: before, category: { notIn: PAYROLL_EXPENSE_CATEGORIES } },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { ref_type: { in: ["SALE", "BIRD_SALE"] }, payment_date: before },
-                _sum: { amount: true },
-            }),
-            prisma.payment.aggregate({
-                where: { ref_type: { in: ["PURCHASE", "EXPENSE"] }, payment_date: before },
-                _sum: { amount: true },
-            }),
-        ]);
+    const [
+        moneyIn,
+        moneyOut,
+        sales,
+        birdSales,
+        purchases,
+        expenses,
+        salesPaid,
+        purchasesPaid,
+        loansTaken,
+        loansRepaid,
+    ] = await Promise.all([
+        prisma.payment.aggregate({
+            where: { direction: "INCOMING", payment_date: before, ref_type: { not: "TRANSFER" } },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { direction: "OUTGOING", payment_date: before, ref_type: { not: "TRANSFER" } },
+            _sum: { amount: true },
+        }),
+        prisma.sale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
+        prisma.birdSale.aggregate({ where: { sale_date: before }, _sum: { due_amount: true } }),
+        prisma.purchase.aggregate({
+            where: { purchase_date: before },
+            _sum: { due_amount: true },
+        }),
+        // Payroll's own expenses are settled by their payout, never owed as an expense.
+        prisma.expense.aggregate({
+            where: { date: before, category: { notIn: NEVER_OWED_EXPENSE_CATEGORIES } },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { ref_type: { in: ["SALE", "BIRD_SALE"] }, payment_date: before },
+            _sum: { amount: true },
+        }),
+        prisma.payment.aggregate({
+            where: { ref_type: { in: ["PURCHASE", "EXPENSE"] }, payment_date: before },
+            _sum: { amount: true },
+        }),
+        // A loan owes its total (principal + interest); installments are its OUTGOING payments.
+        prisma.loan.aggregate({ where: { received_on: before }, _sum: { total_payable: true } }),
+        prisma.payment.aggregate({
+            where: { ref_type: "LOAN", direction: "OUTGOING", payment_date: before },
+            _sum: { amount: true },
+        }),
+    ]);
     return {
         cash: D(moneyIn._sum.amount).minus(D(moneyOut._sum.amount)),
         receivables: D(sales._sum.due_amount)
@@ -172,6 +188,7 @@ async function balancesAt(at: Date) {
         payables: D(purchases._sum.due_amount)
             .plus(D(expenses._sum.amount))
             .minus(D(purchasesPaid._sum.amount)),
+        loans_owed: D(loansTaken._sum.total_payable).minus(D(loansRepaid._sum.amount)),
     };
 }
 
@@ -194,6 +211,7 @@ async function periodFigures(range: Range) {
         cash: n(end.cash),
         receivables: n(end.receivables),
         payables: n(end.payables),
+        loans_owed: n(end.loans_owed),
         cost_breakdown: costLines,
     };
 }
@@ -236,7 +254,11 @@ export const FinanceService = {
                     costsIn(r, labels),
                     prisma.payment.groupBy({
                         by: ["direction"],
-                        where: { payment_date: { gte: r.from, lt: r.to } },
+                        // A transfer between the farm's own accounts is neither money in nor out.
+                        where: {
+                            payment_date: { gte: r.from, lt: r.to },
+                            ref_type: { not: "TRANSFER" },
+                        },
                         _sum: { amount: true },
                     }),
                     balancesAt(r.to),
@@ -272,7 +294,7 @@ export const FinanceService = {
                     select: { id: true, supplier_id: true, purchase_date: true, due_amount: true },
                 }),
                 prisma.expense.findMany({
-                    where: { category: { notIn: PAYROLL_EXPENSE_CATEGORIES } },
+                    where: { category: { notIn: NEVER_OWED_EXPENSE_CATEGORIES } },
                     select: { id: true, category: true, date: true, amount: true },
                 }),
                 prisma.payment.groupBy({ by: ["ref_id"], _sum: { amount: true } }),

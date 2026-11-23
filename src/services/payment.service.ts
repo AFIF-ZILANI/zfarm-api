@@ -1,46 +1,62 @@
 import prisma from "@lib/db";
-import { PAYROLL_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
+import { NEVER_OWED_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
 import { Prisma } from "../../prisma/generated/prisma/client";
 import { AppError } from "@lib/app-error";
 import { handlePrismaWriteError } from "@lib/prisma-errors";
 import { toSkipTake, buildMeta } from "@lib/pagination";
-import type {
-    CreatePaymentInput,
-    ListPaymentsQuery,
-    PaymentRefType,
+import {
+    NO_BILL_REFS,
+    type CreatePaymentInput,
+    type ListPaymentsQuery,
+    type PaymentRefType,
 } from "@validators/payment.validator";
 
 // Every ref a stored row can carry, not just the ones a client may author --
 // PAYROLL rows are emitted by EmployeePayout confirmation (wage or bonus) and still have to be
 // readable here.
 type RefType = PaymentRefType;
+type BillRef = Exclude<RefType, (typeof NO_BILL_REFS)[number]>;
 
-const REF_LABEL: Record<RefType, string> = {
+const REF_LABEL: Record<BillRef, string> = {
     SALE: "Sale",
     BIRD_SALE: "BirdSale",
     PURCHASE: "Purchase",
     EXPENSE: "Expense",
     PAYROLL: "Payout",
+    LOAN: "Loan",
 };
 
-/** What a referenced record owes before any Payment rows are netted off.
- * Sale/BirdSale/Purchase carry a create-time `due_amount` snapshot; Expense
- * and PayrollPayout have none, so the whole amount is owed -- and for a payout
- * that whole amount includes the transfer fee, because the fee left the wallet
- * in the same transfer. Throws if the ref doesn't exist -- ref_id is polymorphic with no FK behind it, so this
- * is the only thing standing between a typo and an orphaned payment. */
-/** Money in or out follows from what the payment settles -- never from the client. */
+/** Money in or out follows from what the payment settles -- never from the client. A LOAN payment
+ * authored here is an installment; the money borrowed comes in through LoanService. A TRANSFER is
+ * stored OUTGOING only because the column needs a value: it names both accounts and every cash total
+ * leaves it out. */
 const DIRECTION = {
     SALE: "INCOMING",
     BIRD_SALE: "INCOMING",
     PURCHASE: "OUTGOING",
     EXPENSE: "OUTGOING",
     PAYROLL: "OUTGOING",
-} as const;
+    LOAN: "OUTGOING",
+    OWNER_CAPITAL: "INCOMING",
+    OTHER_IN: "INCOMING",
+    OWNER_DRAW: "OUTGOING",
+    OTHER_OUT: "OUTGOING",
+    TRANSFER: "OUTGOING",
+} as const satisfies Record<RefType, "INCOMING" | "OUTGOING">;
 
+const isNoBill = (t: RefType): t is (typeof NO_BILL_REFS)[number] =>
+    (NO_BILL_REFS as readonly string[]).includes(t);
+
+/** What a referenced record owes before any Payment rows are netted off.
+ * Sale/BirdSale/Purchase carry a create-time `due_amount` snapshot; Expense
+ * and PayrollPayout have none, so the whole amount is owed -- and for a payout
+ * that whole amount includes the transfer fee, because the fee left the wallet
+ * in the same transfer. A loan owes its total_payable. Throws if the ref doesn't exist -- ref_id is
+ * polymorphic with no FK behind it, so this is the only thing standing between a typo and an orphaned
+ * payment. */
 async function owedForRef(
     tx: Prisma.TransactionClient,
-    ref_type: RefType,
+    ref_type: BillRef,
     ref_id: string,
 ): Promise<Prisma.Decimal> {
     const owed = await (async () => {
@@ -77,6 +93,13 @@ async function owedForRef(
                 });
                 return payout?.amount.plus(payout.fee_paid_by_farm);
             }
+            case "LOAN":
+                return (
+                    await tx.loan.findUnique({
+                        where: { id: ref_id },
+                        select: { total_payable: true },
+                    })
+                )?.total_payable;
         }
     })();
 
@@ -86,12 +109,16 @@ async function owedForRef(
 
 async function outstandingWithin(
     tx: Prisma.TransactionClient,
-    ref_type: RefType,
+    ref_type: BillRef,
     ref_id: string,
 ): Promise<Prisma.Decimal> {
+    // Only payments settling the bill: a loan's own receipt (INCOMING) shares its ref.
     const [owed, paid] = await Promise.all([
         owedForRef(tx, ref_type, ref_id),
-        tx.payment.aggregate({ where: { ref_type, ref_id }, _sum: { amount: true } }),
+        tx.payment.aggregate({
+            where: { ref_type, ref_id, direction: DIRECTION[ref_type] },
+            _sum: { amount: true },
+        }),
     ]);
     return owed.minus(paid._sum.amount ?? new Prisma.Decimal(0));
 }
@@ -131,86 +158,9 @@ export const PaymentService = {
         return payment;
     },
 
-    /** Refuses to overpay a record. The outstanding balance is a sum with no row to lock, so
-     * the transaction takes an advisory lock on the record first: a concurrent payment waits,
-     * then sees what this one paid. This is what keeps every row's
-     * outstanding balance >= 0, which in turn is what lets the list summaries
-     * compute total due as two scalar sums instead of per-row clamped math. */
     async create(data: CreatePaymentInput) {
         try {
-            return await prisma.$transaction(async (tx) => {
-                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${data.ref_id}, 0))`;
-                if (data.ref_type === "EXPENSE") {
-                    // Wage and fee expenses are settled by their payout's own PAYROLL Payment;
-                    // paying them here as well would send the money out twice.
-                    const expense = await tx.expense.findUnique({
-                        where: { id: data.ref_id },
-                        select: { category: true },
-                    });
-                    if (expense && PAYROLL_EXPENSE_CATEGORIES.includes(expense.category)) {
-                        throw AppError.badRequest(
-                            "Salary and bonus expenses are paid through their payout, not a payment",
-                        );
-                    }
-                }
-                // One farm account, on the side the money moved -- the other party is on the bill.
-                const incoming = DIRECTION[data.ref_type] === "INCOMING";
-                if (
-                    incoming
-                        ? !data.to_instrument_id || data.from_instrument_id
-                        : !data.from_instrument_id || data.to_instrument_id
-                ) {
-                    throw AppError.badRequest(
-                        incoming
-                            ? "Money received names only the account it landed in (to_instrument_id)"
-                            : "Money paid out names only the account it left (from_instrument_id)",
-                    );
-                }
-                // Same rule as paid-at-create: money can't move through a deactivated account (the
-                // dashboard cash position only sums active ones, so it would silently vanish).
-                for (const id of [data.from_instrument_id, data.to_instrument_id]) {
-                    if (id === undefined) continue;
-                    const inst = await tx.paymentInstrument.findUnique({
-                        where: { id },
-                        select: { is_active: true, label: true },
-                    });
-                    if (!inst) throw AppError.badRequest("The account named does not exist");
-                    if (!inst.is_active)
-                        throw AppError.badRequest(
-                            `${inst.label} is inactive -- pick an active account`,
-                        );
-                }
-                const outstanding = await outstandingWithin(tx, data.ref_type, data.ref_id);
-                if (new Prisma.Decimal(data.amount).greaterThan(outstanding)) {
-                    throw AppError.badRequest(
-                        `Payment exceeds the outstanding balance of ${outstanding.toString()}`,
-                        { fields: { amount: `Outstanding balance is ${outstanding.toString()}` } },
-                    );
-                }
-
-                return tx.payment.create({
-                    data: {
-                        amount: data.amount,
-                        payment_date: data.payment_date,
-                        direction: DIRECTION[data.ref_type],
-                        ref_type: data.ref_type,
-                        ref_id: data.ref_id,
-                        ...(data.from_instrument_id !== undefined && {
-                            from_instrument_id: data.from_instrument_id,
-                        }),
-                        ...(data.to_instrument_id !== undefined && {
-                            to_instrument_id: data.to_instrument_id,
-                        }),
-                        ...(data.transaction_ref !== undefined && {
-                            transaction_ref: data.transaction_ref,
-                        }),
-                        ...(data.handled_by_id !== undefined && {
-                            handled_by_id: data.handled_by_id,
-                        }),
-                        ...(data.note !== undefined && { note: data.note }),
-                    },
-                });
-            });
+            return await prisma.$transaction((tx) => writePayment(tx, data));
         } catch (err) {
             return handlePrismaWriteError(err);
         }
@@ -235,6 +185,7 @@ export const PaymentService = {
     /** Live outstanding balance for one polymorphic ref -- the owed figure
      * minus every Payment recorded against it. */
     async outstandingForRef(ref_type: RefType, ref_id: string) {
+        if (isNoBill(ref_type)) throw AppError.badRequest("This kind of payment has no bill");
         return outstandingWithin(prisma, ref_type, ref_id);
     },
 
@@ -248,3 +199,107 @@ export const PaymentService = {
         return { ref_type, ref_id, total_paid: result._sum.amount ?? new Prisma.Decimal(0) };
     },
 };
+
+/** A payment as written -- the API's create body, or a loan installment from LoanService. */
+export type PaymentWrite = Omit<CreatePaymentInput, "ref_type"> & {
+    ref_type: CreatePaymentInput["ref_type"] | "LOAN";
+};
+
+/**
+ * Inside the caller's transaction. Refuses to overpay a record. The outstanding balance is a sum with
+ * no row to lock, so the transaction takes an advisory lock on the record first: a concurrent payment
+ * waits, then sees what this one paid. This is what keeps every row's outstanding balance >= 0, which
+ * in turn is what lets the list summaries compute total due as two scalar sums instead of per-row
+ * clamped math. A row with no bill (owner capital/draw, other, transfer) has nothing to overpay.
+ */
+export async function writePayment(tx: Prisma.TransactionClient, data: PaymentWrite) {
+    const ref_type = data.ref_type;
+    const noBill = isNoBill(ref_type);
+    if (!noBill && data.ref_id === undefined) throw AppError.badRequest("Say which bill this pays");
+    if (noBill && data.ref_id !== undefined)
+        throw AppError.badRequest("This kind of payment has no bill");
+
+    if (!noBill) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${data.ref_id!}, 0))`;
+    }
+    if (ref_type === "EXPENSE") {
+        // Wage and fee expenses are settled by their payout's own PAYROLL Payment, loan interest by its
+        // installment; paying them here as well would send the money out twice.
+        const expense = await tx.expense.findUnique({
+            where: { id: data.ref_id! },
+            select: { category: true },
+        });
+        if (expense && NEVER_OWED_EXPENSE_CATEGORIES.includes(expense.category)) {
+            throw AppError.badRequest(
+                "Salary, bonus and loan interest are paid through their payout or loan, not a payment",
+            );
+        }
+    }
+    // One farm account, on the side the money moved -- the other party is on the bill. A transfer
+    // moves between two of the farm's own accounts, so it names both.
+    const incoming = DIRECTION[ref_type] === "INCOMING";
+    const wrongSides =
+        ref_type === "TRANSFER"
+            ? !data.from_instrument_id ||
+              !data.to_instrument_id ||
+              data.from_instrument_id === data.to_instrument_id
+            : incoming
+              ? !data.to_instrument_id || data.from_instrument_id
+              : !data.from_instrument_id || data.to_instrument_id;
+    if (wrongSides) {
+        throw AppError.badRequest(
+            ref_type === "TRANSFER"
+                ? "A transfer names the account it left and a different account it went to"
+                : incoming
+                  ? "Money received names only the account it landed in (to_instrument_id)"
+                  : "Money paid out names only the account it left (from_instrument_id)",
+        );
+    }
+    // Same rule as paid-at-create: money can't move through a deactivated account (the
+    // dashboard cash position only sums active ones, so it would silently vanish).
+    for (const id of [data.from_instrument_id, data.to_instrument_id]) {
+        if (id === undefined) continue;
+        const inst = await tx.paymentInstrument.findUnique({
+            where: { id },
+            select: { is_active: true, label: true },
+        });
+        if (!inst) throw AppError.badRequest("The account named does not exist");
+        if (!inst.is_active)
+            throw AppError.badRequest(`${inst.label} is inactive -- pick an active account`);
+    }
+    if (!noBill) {
+        const outstanding = await outstandingWithin(tx, ref_type, data.ref_id!);
+        if (new Prisma.Decimal(data.amount).greaterThan(outstanding)) {
+            throw AppError.badRequest(
+                `Payment exceeds the outstanding balance of ${outstanding.toString()}`,
+                { fields: { amount: `Outstanding balance is ${outstanding.toString()}` } },
+            );
+        }
+    }
+
+    // ponytail: a row with no bill points at itself, so every ref_id reader keeps a non-null key.
+    const id = crypto.randomUUID();
+    return tx.payment.create({
+        data: {
+            id,
+            amount: data.amount,
+            payment_date: data.payment_date,
+            direction: DIRECTION[ref_type],
+            ref_type,
+            ref_id: noBill ? id : data.ref_id!,
+            ...(data.from_instrument_id !== undefined && {
+                from_instrument_id: data.from_instrument_id,
+            }),
+            ...(data.to_instrument_id !== undefined && {
+                to_instrument_id: data.to_instrument_id,
+            }),
+            ...(data.transaction_ref !== undefined && {
+                transaction_ref: data.transaction_ref,
+            }),
+            ...(data.handled_by_id !== undefined && {
+                handled_by_id: data.handled_by_id,
+            }),
+            ...(data.note !== undefined && { note: data.note }),
+        },
+    });
+}

@@ -9,7 +9,8 @@ import type {
     ListExpensesQuery,
 } from "@validators/expense.validator";
 import {
-    PAYROLL_EXPENSE_CATEGORIES,
+    LOAN_INTEREST,
+    NEVER_OWED_EXPENSE_CATEGORIES,
     recordPaidAtCreate,
     requirePaidInstrument,
 } from "@lib/paid-at-create";
@@ -69,7 +70,7 @@ export const ExpenseService = {
             else if (r.cost_type === "SHARED_PERIOD") out.shared += amount;
             else if (r.cost_type === "STOCK") out.stock += amount;
             else out.capital += amount;
-            if (PAYROLL_EXPENSE_CATEGORIES.includes(r.category)) out.paid += amount;
+            if (NEVER_OWED_EXPENSE_CATEGORIES.includes(r.category)) out.paid += amount;
             else {
                 const p = Math.min(amount, paidBy.get(r.id) ?? 0);
                 out.paid += p;
@@ -132,14 +133,18 @@ export const ExpenseService = {
 export type ExpenseWrite = Omit<CreateExpenseInput, "cost_type"> & {
     cost_type: CreateExpenseInput["cost_type"] | "STOCK";
     purchase_id?: string;
+    loan_id?: string;
 };
 
 /** Fail before any write: payroll expenses are paid by their payout; paid money names its account. */
 export function checkExpensePaid(
     data: Pick<ExpenseWrite, "category" | "paid_amount" | "paid_from_instrument_id">,
 ) {
+    if (data.category === LOAN_INTEREST) {
+        throw AppError.badRequest("Loan interest is recorded by paying the loan's installment");
+    }
     const paid = new Prisma.Decimal(data.paid_amount ?? 0);
-    if (paid.greaterThan(0) && PAYROLL_EXPENSE_CATEGORIES.includes(data.category)) {
+    if (paid.greaterThan(0) && NEVER_OWED_EXPENSE_CATEGORIES.includes(data.category)) {
         throw AppError.badRequest(
             "Salary and bonus expenses are paid through their payout, not a payment",
         );
@@ -159,6 +164,7 @@ export async function writeExpense(tx: Prisma.TransactionClient, data: ExpenseWr
             recorded_by_id: data.recorded_by_id,
             ...(data.batch_id !== undefined && { batch_id: data.batch_id }),
             ...(data.purchase_id !== undefined && { purchase_id: data.purchase_id }),
+            ...(data.loan_id !== undefined && { loan_id: data.loan_id }),
             ...(data.remarks !== undefined && { remarks: data.remarks }),
         },
     });

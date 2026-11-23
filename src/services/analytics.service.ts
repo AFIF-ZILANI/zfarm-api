@@ -7,7 +7,7 @@ import { getItemAvgCosts } from "@lib/stock-value";
 import { chargeRatios, landedTotal } from "@lib/purchase-charges";
 import { BatchPnlService } from "@services/batch-pnl.service";
 import { isNonDepleting } from "@lib/coded-stock";
-import { PAYROLL_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
+import { NEVER_OWED_EXPENSE_CATEGORIES } from "@lib/paid-at-create";
 import type { FinancialDashboardQuery } from "@validators/analytics.validator";
 
 // kgPerBaseUnit lives with the other unit maths; re-exported for existing callers.
@@ -334,7 +334,7 @@ export const AnalyticsService = {
             prisma.purchase.aggregate({ _sum: { due_amount: true } }),
             // Payroll's own expenses are settled by their payout, never owed as an expense.
             prisma.expense.aggregate({
-                where: { category: { notIn: PAYROLL_EXPENSE_CATEGORIES } },
+                where: { category: { notIn: NEVER_OWED_EXPENSE_CATEGORIES } },
                 _sum: { amount: true },
             }),
             prisma.sale.aggregate({ _sum: { due_amount: true } }),
