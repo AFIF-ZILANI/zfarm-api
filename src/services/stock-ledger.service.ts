@@ -1,3 +1,4 @@
+import { itemUnitsWithLabel } from "@lib/item-units";
 import prisma from "@lib/db";
 import type { Prisma } from "../../prisma/generated/prisma/client";
 import { toSkipTake, buildMeta } from "@lib/pagination";
@@ -36,7 +37,7 @@ export const StockLedgerService = {
         const [entries, total] = await Promise.all([
             prisma.stockLedger.findMany({
                 where,
-                include: { item: { select: { id: true, name: true, unit: true, itemUnits: true } } },
+                include: { item: { select: { id: true, name: true, unit: true, itemUnits: itemUnitsWithLabel } } },
                 orderBy: { occurred_at: "desc" },
                 ...toSkipTake(query),
             }),

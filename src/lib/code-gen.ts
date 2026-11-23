@@ -14,3 +14,20 @@ export function generateCode(label: string): string {
     }
     return withoutSpecial.replace(/\s+/g, "_");
 }
+
+/**
+ * Units are named in any script and often carry a size ("Bag 12.5kg", "ছোট বস্তা"), so letters, vowel signs
+ * and digits of every script stay, and so does a decimal point between digits: "Bag 12.5kg" must never
+ * read as "BAG_125KG". Also the key two names are compared by, so "Small-Bag" is "Small Bag".
+ */
+export function generateUnitCode(label: string): string {
+    const code = label
+        .normalize("NFC")
+        .replace(/[‌‍]/g, "") // joiners inside Bangla words
+        .toUpperCase()
+        .replace(/[^\p{L}\p{M}\p{N}.]+/gu, " ")
+        .replace(/(?<!\p{N})\.|\.(?!\p{N})/gu, " ")
+        .trim()
+        .replace(/\s+/g, "_");
+    return /[\p{L}\p{N}]/u.test(code) ? code : "";
+}

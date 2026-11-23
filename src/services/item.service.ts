@@ -8,15 +8,71 @@ import type {
     UpdateItemInput,
     ListItemsQuery,
     CreateItemUnitInput,
+    ItemUnitInput,
 } from "@validators/item.validator";
 import { Prisma } from "../../prisma/generated/prisma/client";
 import { getItemBalances, getStockByLocation } from "@lib/stock-balance";
-import { GENERIC_ITEM_UNITS } from "@lib/enums";
+import type { ITEM_BASE_UNITS } from "@lib/enums";
+import { itemUnitsWithLabel } from "@lib/item-units";
+import { UnitService, assertConvertsTo } from "@services/unit.service";
 
-const include = { suppliers: true, itemUnits: true } as const;
+const include = { suppliers: true, itemUnits: itemUnitsWithLabel } as const;
+
+/** Makes the item's conversions exactly `rows`. Sizes change in place, so a unit can't be lost halfway. */
+async function syncItemUnits(
+    tx: Prisma.TransactionClient,
+    item: { id: string; unit: string },
+    rows: ItemUnitInput[],
+) {
+    const had = new Set(
+        (await tx.itemUnit.findMany({ where: { item_id: item.id }, select: { unit: true } })).map(
+            (u) => u.unit,
+        ),
+    );
+    const wanted = new Map<
+        string,
+        Pick<ItemUnitInput, "is_purchasable" | "is_usable"> & {
+            factor_to_base: Prisma.Decimal | number;
+        }
+    >();
+    for (const { unit: code, label, factor_to_base, is_purchasable, is_usable } of rows) {
+        const unit =
+            label !== undefined
+                ? await UnitService.forItem(
+                      tx,
+                      label,
+                      item.unit as (typeof ITEM_BASE_UNITS)[number],
+                  )
+                : await tx.unit.findUnique({ where: { code: code! } });
+        if (!unit) throw AppError.badRequest(`"${code}" does not reference a known unit code`);
+        if (unit.code === item.unit) {
+            throw AppError.badRequest(`"${unit.label}" already is this item's base unit`);
+        }
+        // Only a unit being added is checked: one from before the family rules must not block every later edit.
+        if (!had.has(unit.code)) assertConvertsTo(unit, item.unit);
+        if (wanted.has(unit.code)) throw AppError.badRequest(`"${unit.label}" is listed twice`);
+        // A fixed_factor is a physical constant (Metric Ton = 1000): it wins over whatever was sent.
+        wanted.set(unit.code, {
+            factor_to_base: unit.fixed_factor ?? factor_to_base,
+            is_purchasable,
+            is_usable,
+        });
+    }
+    await tx.itemUnit.deleteMany({
+        where: { item_id: item.id, unit: { notIn: [...wanted.keys()] } },
+    });
+    for (const [unit, data] of wanted) {
+        await tx.itemUnit.upsert({
+            where: { item_id_unit: { item_id: item.id, unit } },
+            create: { item_id: item.id, unit, ...data },
+            update: data,
+        });
+    }
+}
 
 /** A farm-made item is never bought, so it has no lots to put QR codes on (DB CHECK Item_farm_made_not_tracked). */
-const farmMadeTracked = () => AppError.badRequest("An item made on the farm can't be tracked by QR code");
+const farmMadeTracked = () =>
+    AppError.badRequest("An item made on the farm can't be tracked by QR code");
 
 export const ItemService = {
     async getAll(query: ListItemsQuery) {
@@ -55,29 +111,34 @@ export const ItemService = {
     async create(data: CreateItemInput) {
         if (data.is_farm_made && data.is_unit_tracked) throw farmMadeTracked();
         try {
-            return await prisma.item.create({
-                data: {
-                    name: data.name,
-                    normalized_key: normalizeKey(data.name),
-                    category: data.category,
-                    unit: data.unit,
-                    ...(data.reorder_level !== undefined && { reorder_level: data.reorder_level }),
-                    ...(data.preferred_reorder_qty !== undefined && {
-                        preferred_reorder_qty: data.preferred_reorder_qty,
-                    }),
-                    ...(data.lead_time_days !== undefined && {
-                        lead_time_days: data.lead_time_days,
-                    }),
-                    ...(data.supplier_ids !== undefined && {
-                        suppliers: { connect: data.supplier_ids.map((id) => ({ id })) },
-                    }),
-                    ...(data.meta_data !== undefined && { meta_data: data.meta_data }),
-                    ...(data.is_unit_tracked !== undefined && {
-                        is_unit_tracked: data.is_unit_tracked,
-                    }),
-                    ...(data.is_farm_made !== undefined && { is_farm_made: data.is_farm_made }),
-                },
-                include,
+            return await prisma.$transaction(async (tx) => {
+                const item = await tx.item.create({
+                    data: {
+                        name: data.name,
+                        normalized_key: normalizeKey(data.name),
+                        category: data.category,
+                        unit: data.unit,
+                        ...(data.reorder_level !== undefined && {
+                            reorder_level: data.reorder_level,
+                        }),
+                        ...(data.preferred_reorder_qty !== undefined && {
+                            preferred_reorder_qty: data.preferred_reorder_qty,
+                        }),
+                        ...(data.lead_time_days !== undefined && {
+                            lead_time_days: data.lead_time_days,
+                        }),
+                        ...(data.supplier_ids !== undefined && {
+                            suppliers: { connect: data.supplier_ids.map((id) => ({ id })) },
+                        }),
+                        ...(data.meta_data !== undefined && { meta_data: data.meta_data }),
+                        ...(data.is_unit_tracked !== undefined && {
+                            is_unit_tracked: data.is_unit_tracked,
+                        }),
+                        ...(data.is_farm_made !== undefined && { is_farm_made: data.is_farm_made }),
+                    },
+                });
+                if (data.units) await syncItemUnits(tx, item, data.units);
+                return tx.item.findUniqueOrThrow({ where: { id: item.id }, include });
             });
         } catch (err) {
             return handlePrismaWriteError(err);
@@ -98,6 +159,7 @@ export const ItemService = {
             meta_data,
             is_unit_tracked,
             is_farm_made,
+            units,
         } = data;
         if (
             !name &&
@@ -108,7 +170,8 @@ export const ItemService = {
             !supplier_ids &&
             meta_data === undefined &&
             is_unit_tracked === undefined &&
-            is_farm_made === undefined
+            is_farm_made === undefined &&
+            units === undefined
         ) {
             throw AppError.badRequest("No update fields provided");
         }
@@ -122,39 +185,53 @@ export const ItemService = {
                 select: { is_unit_tracked: true, is_farm_made: true },
             });
             if (current) {
-                if ((is_farm_made ?? current.is_farm_made) && (is_unit_tracked ?? current.is_unit_tracked))
+                if (
+                    (is_farm_made ?? current.is_farm_made) &&
+                    (is_unit_tracked ?? current.is_unit_tracked)
+                )
                     throw farmMadeTracked();
                 const purchases = await prisma.purchaseItem.count({ where: { item_id: id } });
-                if (is_unit_tracked !== undefined && current.is_unit_tracked !== is_unit_tracked && purchases > 0) {
-                    throw AppError.conflict("Tracking mode can't change once the item has been purchased");
+                if (
+                    is_unit_tracked !== undefined &&
+                    current.is_unit_tracked !== is_unit_tracked &&
+                    purchases > 0
+                ) {
+                    throw AppError.conflict(
+                        "Tracking mode can't change once the item has been purchased",
+                    );
                 }
                 if (
                     is_farm_made !== undefined &&
                     current.is_farm_made !== is_farm_made &&
                     purchases + (await prisma.saleItem.count({ where: { item_id: id } })) > 0
                 ) {
-                    throw AppError.conflict("Farm-made can't change once the item has been bought or sold");
+                    throw AppError.conflict(
+                        "Farm-made can't change once the item has been bought or sold",
+                    );
                 }
             }
         }
 
         try {
-            return await prisma.item.update({
-                where: { id },
-                data: {
-                    ...(name && { name, normalized_key: normalizeKey(name) }),
-                    ...(category && { category }),
-                    ...(reorder_level !== undefined && { reorder_level }),
-                    ...(preferred_reorder_qty !== undefined && { preferred_reorder_qty }),
-                    ...(lead_time_days !== undefined && { lead_time_days }),
-                    ...(supplier_ids !== undefined && {
-                        suppliers: { set: supplier_ids.map((id) => ({ id })) },
-                    }),
-                    ...(meta_data !== undefined && { meta_data }),
-                    ...(is_unit_tracked !== undefined && { is_unit_tracked }),
-                    ...(is_farm_made !== undefined && { is_farm_made }),
-                },
-                include,
+            return await prisma.$transaction(async (tx) => {
+                if (units) await syncItemUnits(tx, item, units);
+                return tx.item.update({
+                    where: { id },
+                    data: {
+                        ...(name && { name, normalized_key: normalizeKey(name) }),
+                        ...(category && { category }),
+                        ...(reorder_level !== undefined && { reorder_level }),
+                        ...(preferred_reorder_qty !== undefined && { preferred_reorder_qty }),
+                        ...(lead_time_days !== undefined && { lead_time_days }),
+                        ...(supplier_ids !== undefined && {
+                            suppliers: { set: supplier_ids.map((id) => ({ id })) },
+                        }),
+                        ...(meta_data !== undefined && { meta_data }),
+                        ...(is_unit_tracked !== undefined && { is_unit_tracked }),
+                        ...(is_farm_made !== undefined && { is_farm_made }),
+                    },
+                    include,
+                });
             });
         } catch (err) {
             return handlePrismaWriteError(err);
@@ -242,19 +319,7 @@ export const ItemUnitService = {
 
         const unitRow = await prisma.unit.findUnique({ where: { code: data.unit } });
         if (!unitRow) throw AppError.badRequest("unit does not reference a known unit code");
-        if (unitRow.is_base) {
-            throw AppError.badRequest(
-                `"${data.unit}" is a base unit and can't be added as a conversion`,
-            );
-        }
-        // A unit tied to a specific base family (e.g. LITER -> ML) can't be added to an item whose
-        // own base unit is different (e.g. G) -- GENERIC_ITEM_UNITS (e.g. Container) are the only
-        // exception, valid under any family.
-        if (!GENERIC_ITEM_UNITS.has(unitRow.code) && unitRow.base_unit !== item.unit) {
-            throw AppError.badRequest(
-                `"${data.unit}" belongs to the ${unitRow.base_unit} family, not this item's base unit "${item.unit}"`,
-            );
-        }
+        assertConvertsTo(unitRow, item.unit);
         // A fixed_factor is a physical constant (Liter=1000, Ft=0.3048, ...) -- always use it over
         // whatever the client sent, so a typo can't desync an item's conversion from reality.
         const factor_to_base = unitRow.fixed_factor ?? data.factor_to_base;
