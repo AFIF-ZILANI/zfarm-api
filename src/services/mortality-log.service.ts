@@ -59,6 +59,7 @@ export const MortalityLogService = {
                         recorded_by_id: data.recorded_by_id,
                         idempotency_key: data.idempotency_key ?? crypto.randomUUID(),
                         ...(data.cause_note !== undefined && { cause_note: data.cause_note }),
+                        ...(data.suspected_cause != null && { suspected_cause: data.suspected_cause }),
                         ...(data.disease_case_id !== undefined && {
                             disease_case_id: data.disease_case_id,
                         }),

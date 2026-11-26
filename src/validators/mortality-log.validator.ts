@@ -6,6 +6,8 @@ export const createMortalityLogSchema = z.object({
     house_id: z.string().uuid(),
     count_died: z.coerce.number().int().positive("Count died must be positive"),
     cause_note: z.string().optional(),
+    // Unknown is sent as null or left out.
+    suspected_cause: z.enum(["NATURAL", "INJURY", "ACCIDENT", "DISEASE", "WEAKNESS"]).nullable().optional(),
     disease_case_id: z.string().uuid().optional(),
     date: z.coerce.date(),
     idempotency_key: z.string().min(1).optional(),

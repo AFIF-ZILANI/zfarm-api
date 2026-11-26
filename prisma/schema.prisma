@@ -121,6 +121,15 @@ enum CostType {
   STOCK // a purchase's own charge (transport, labour) -- landed into that purchase's stock cost, never an expense line
 }
 
+// What the worker thinks killed the birds, picked on the mortality log. Unknown is stored as null.
+enum MortalityCause {
+  NATURAL // normal, expected daily loss
+  INJURY // fighting or pecking, bleeding
+  ACCIDENT // crushed, trapped, smothered, drowned
+  DISEASE // looked sick
+  WEAKNESS // weak, stunted or unhealthy, failed to thrive
+}
+
 enum DiscountType {
   FLAT // discount_value is a currency amount
   PERCENT // discount_value is a percentage (0-100) of the amount it discounts
@@ -879,6 +888,7 @@ model MortalityLog {
   house           Houses       @relation(fields: [house_id], references: [id])
   count_died      Int
   cause_note      String?
+  suspected_cause MortalityCause? // null = unknown
   disease_case_id String? // the outbreak these birds died of, if known
   disease_case    DiseaseCase? @relation(fields: [disease_case_id], references: [id], onDelete: SetNull)
   date            DateTime
