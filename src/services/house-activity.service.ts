@@ -38,9 +38,9 @@ const unitText = (code: string) => code.toLowerCase().replace(/_/g, " ");
 /** MortalityCause in words, for the activity line. Unknown (null) adds nothing. */
 const CAUSE_LABEL: Record<string, string> = {
     NATURAL: "Normal loss",
-    INJURY: "Fighting or pecking injury",
+    INJURY: "Fighting or pecking",
     ACCIDENT: "Accident",
-    DISEASE: "Looked sick",
+    DISEASE: "Sick",
     WEAKNESS: "Weak or unhealthy",
 };
 const titleCase = (code: string) => code.charAt(0) + code.slice(1).toLowerCase().replace(/_/g, " ");
