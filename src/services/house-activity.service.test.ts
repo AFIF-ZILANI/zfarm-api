@@ -51,6 +51,7 @@ describe("houseActivity", () => {
                 house_id: houseId,
                 count_died: count,
                 cause_note: count === 3 ? "Heat" : undefined,
+                suspected_cause: count === 3 ? "NATURAL" : undefined,
                 date: hoursAgo(h),
                 recorded_by_id: profileId,
             });
@@ -113,7 +114,7 @@ describe("houseActivity", () => {
         expect(activity[0]).toMatchObject({ title: "Weighed 40 g average", detail: "500 birds sampled" });
         expect(activity[1]).toMatchObject({
             title: "3 birds died",
-            detail: "Heat",
+            detail: "Normal loss. Heat",
             by: "Activity Recorder",
         });
         expect(activity[2]).toMatchObject({

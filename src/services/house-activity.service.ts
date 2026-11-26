@@ -35,6 +35,14 @@ export type ActivityEntry = {
 const num = (n: Prisma.Decimal | number) =>
     Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 const unitText = (code: string) => code.toLowerCase().replace(/_/g, " ");
+/** MortalityCause in words, for the activity line. Unknown (null) adds nothing. */
+const CAUSE_LABEL: Record<string, string> = {
+    NATURAL: "Normal loss",
+    INJURY: "Fighting or pecking",
+    ACCIDENT: "Accident",
+    DISEASE: "Sick",
+    WEAKNESS: "Weak or unhealthy",
+};
 const titleCase = (code: string) => code.charAt(0) + code.slice(1).toLowerCase().replace(/_/g, " ");
 
 /**
@@ -165,7 +173,7 @@ export async function houseActivity(houseId: string, query: PaginationQuery) {
             kind: "MORTALITY" as const,
             at: m.date,
             title: `${m.count_died.toLocaleString("en-US")} ${m.count_died === 1 ? "bird" : "birds"} died`,
-            detail: m.cause_note,
+            detail: [m.suspected_cause && CAUSE_LABEL[m.suspected_cause], m.cause_note].filter(Boolean).join(". ") || null,
             by: m.recorded_by.name,
             batch_code: m.batch.batch_code,
         })),
